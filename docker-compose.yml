@@ -1,0 +1,9 @@
+version: '3.9'
+
+services:
+  telegram_bot:
+    build: .
+    container_name: task_manager_bot
+    restart: unless-stopped
+    volumes:
+      - ./Data:/app/Data
