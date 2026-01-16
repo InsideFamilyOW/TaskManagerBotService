@@ -53,15 +53,20 @@ class ExecutorKeyboards:
             builder.button(text="💬 УТОЧНИТЬ", callback_data=f"executor_clarify_{task_id}")
             builder.adjust(1)
         elif task_status == TaskStatus.IN_PROGRESS:
-            # Задача в работе - отказаться нельзя после принятия
+            # Задача в работе - можно выполнить или отказаться
             builder.button(text="✅ ВЫПОЛНИТЬ", callback_data=f"executor_complete_{task_id}")
+            if can_reject:
+                builder.button(text="❌ ОТКАЗАТЬСЯ", callback_data=f"executor_reject_{task_id}")
             builder.button(text="💬 СООБЩЕНИЕ", callback_data=f"executor_message_{task_id}")
             builder.button(text="📎 ДОБАВИТЬ ФАЙЛ", callback_data=f"executor_add_file_{task_id}")
             builder.button(text="📂 ПРОСМОТР ФАЙЛОВ", callback_data=f"executor_view_files_{task_id}")
             builder.button(text="📜 История сообщений", callback_data=f"executor_history_{task_id}")
             builder.button(text="◀️ Назад к задачам", callback_data="executor_my_tasks")
-            # adjust(1, 2, 2, 1) - первая строка 1 кнопка (ВЫПОЛНИТЬ), вторая и третья по 2 кнопки, четвертая 1 кнопка
-            builder.adjust(1, 2, 2, 1)
+            # adjust(1, 1, 2, 2, 1, 1) - первая строка 1 кнопка (ВЫПОЛНИТЬ), вторая 1 кнопка (ОТКАЗАТЬСЯ если can_reject), затем по 2 кнопки, потом по 1
+            if can_reject:
+                builder.adjust(1, 1, 2, 2, 1, 1)
+            else:
+                builder.adjust(1, 2, 2, 1)
         elif task_status == TaskStatus.COMPLETED:
             # Задача выполнена, ждет проверки
             builder.button(text="💬 СООБЩЕНИЕ", callback_data=f"executor_message_{task_id}")

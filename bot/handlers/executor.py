@@ -449,9 +449,9 @@ async def callback_reject_task(callback: CallbackQuery, state: FSMContext):
             await callback.answer("❌ Эта задача была отменена и удалена", show_alert=True)
             return
         
-        # Проверяем, что задача не в работе - отказаться можно только от задач в статусе PENDING
-        if task.status == TaskStatus.IN_PROGRESS:
-            await callback.answer("❌ Нельзя отказаться от задачи, которая уже принята в работу", show_alert=True)
+        # Проверяем, что задача не завершена или одобрена
+        if task.status in [TaskStatus.COMPLETED, TaskStatus.APPROVED]:
+            await callback.answer("❌ Нельзя отказаться от задачи, которая уже выполнена", show_alert=True)
             return
     
     await state.update_data(reject_task_id=task_id)
@@ -540,7 +540,7 @@ async def process_task_rejection(message, task_id: int, reason_enum, reason_text
             return
         
         # Сохраняем причину отказа
-        from db.models import TaskRejection
+        from db.models import TaskRejection, TaskLog
         rejection = TaskRejection(
             task_id=task_id,
             executor_id=executor.id,
@@ -549,13 +549,29 @@ async def process_task_rejection(message, task_id: int, reason_enum, reason_text
         )
         session.add(rejection)
         
-        # Если задача была в работе, уменьшаем загрузку
+        # Сохраняем старый статус для логирования
+        old_status = task.status
+        
+        # Если задача была в работе, уменьшаем загрузку и обнуляем время начала
         if task.status == TaskStatus.IN_PROGRESS:
             await UserQueries.update_user_load(session, executor.id, -1)
+            task.started_at = None  # Обнуляем время начала для следующего исполнителя
         
         # Обновляем статус задачи
         task.executor_id = None
         task.status = TaskStatus.PENDING
+        
+        # Создаем запись в TaskLog для логирования изменения статуса
+        task_log = TaskLog(
+            task_id=task_id,
+            user_id=executor.id,
+            action="status_change",
+            old_status=old_status,
+            new_status=TaskStatus.PENDING,
+            details={"comment": f"Отказ от задачи. Причина: {reason_text}"}
+        )
+        session.add(task_log)
+        
         await session.commit()
         
         # Логируем действие
@@ -568,7 +584,10 @@ async def process_task_rejection(message, task_id: int, reason_enum, reason_text
             details={"reason": reason_text}
         )
         
-        # Логируем в канал
+        # Логируем изменение статуса в канал
+        await LogChannel.log_task_status_change(bot, task, old_status, TaskStatus.PENDING, executor)
+        
+        # Логируем отказ в канал
         await LogChannel.log_task_rejected(bot, task, executor, reason_text)
         
         # Уведомляем байера

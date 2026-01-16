@@ -54,6 +54,3 @@ uploads/
 .DS_Store
 Thumbs.db
 
-# Config (закомментируйте если хотите включить в git)
-# Data/config.py
-
