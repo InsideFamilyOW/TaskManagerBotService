@@ -412,18 +412,26 @@ async def my_profile(message: Message):
 """
         
         # Дополнительная информация для исполнителя
+        reply_markup = None
+
         if user.role == UserRole.EXECUTOR:
             direction_name = direction_names.get(user.direction, "Не указано") if user.direction else "Не указано"
             status = "✅ Активен" if user.is_active else "❌ Неактивен"
+            availability = "🟢 Работаю (принимаю задачи)" if getattr(user, "is_available", True) else "🔴 Не работаю (не принимать задачи)"
             
             text += f"""
 <b>Информация исполнителя:</b>
 • Направление: {direction_name}
 • Статус: {status}
+• Статус приема задач: {availability}
 • Текущая загрузка: {user.current_load} задач
 • Завершено задач: {user.completed_tasks}
 • Средняя оценка: {user.avg_rating:.2f}/5.00
 """
+
+            # Под профилем исполнителя показываем кнопку-переключатель статуса
+            from bot.keyboards.executor_kb import ExecutorKeyboards
+            reply_markup = ExecutorKeyboards.profile_actions(getattr(user, "is_available", True))
         
         # Дополнительная информация для байера
         elif user.role == UserRole.BUYER:
@@ -443,7 +451,7 @@ async def my_profile(message: Message):
 🕒 Последняя активность: {user.last_activity.strftime("%d.%m.%Y %H:%M") if user.last_activity else "Неизвестно"}
 """
         
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 @router.message(F.text == "📊 Статистика")

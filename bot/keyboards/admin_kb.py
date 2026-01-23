@@ -2,7 +2,7 @@
 from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from typing import List
-from db.models import User, UserRole
+from db.models import User, UserRole, TaskStatus
 
 
 class AdminKeyboards:

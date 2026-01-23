@@ -74,7 +74,8 @@ class UserQueries:
         query = select(User).where(
             User.role == UserRole.EXECUTOR,
             User.direction == direction,
-            User.is_active == True
+            User.is_active == True,
+            User.is_available == True  # Показываем только тех, кто принимает задачи
         ).order_by(User.current_load)
         
         # Добавляем лимит если указан (для быстрой загрузки топ исполнителей)
@@ -269,13 +270,19 @@ class UserQueries:
         buyer_id: int,
         direction: DirectionType = None
     ) -> List[User]:
-        """Получить всех исполнителей, назначенных баеру"""
+        """Получить всех ИЛИ только доступных исполнителей, назначенных баеру.
+
+        Используется там, где нужны только доступные (is_available=True) исполнители.
+        Для случаев, когда нужно увидеть всех закреплённых, есть отдельный метод
+        get_all_assigned_executors_for_buyer.
+        """
         stmt = select(User).join(
             executor_buyer_assignments,
             User.id == executor_buyer_assignments.c.executor_id
         ).where(
             executor_buyer_assignments.c.buyer_id == buyer_id,
             User.is_active == True,
+            User.is_available == True,
             User.role == UserRole.EXECUTOR
         )
         
@@ -283,6 +290,28 @@ class UserQueries:
             stmt = stmt.where(User.direction == direction)
         
         stmt = stmt.order_by(User.current_load)
+        result = await session.execute(stmt)
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_all_assigned_executors_for_buyer(
+        session: AsyncSession,
+        buyer_id: int,
+    ) -> List[User]:
+        """Получить всех исполнителей, закреплённых за баером, независимо от is_available.
+
+        Нужен, чтобы корректно показывать список закреплённых исполнителей даже тогда,
+        когда они сейчас недоступны для назначения новых задач.
+        """
+        stmt = select(User).join(
+            executor_buyer_assignments,
+            User.id == executor_buyer_assignments.c.executor_id
+        ).where(
+            executor_buyer_assignments.c.buyer_id == buyer_id,
+            User.is_active == True,
+            User.role == UserRole.EXECUTOR,
+        ).order_by(User.current_load)
+
         result = await session.execute(stmt)
         return result.scalars().all()
     

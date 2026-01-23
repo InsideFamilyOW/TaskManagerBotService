@@ -61,15 +61,61 @@ async def migrate_database():
                 except Exception as e:
                     logger.warning(f"⚠️ Ошибка при миграции {table_name}.{column_name}: {e}")
 
-            # Миграция: удаляем столбец max_tasks из таблицы users
+            # Миграция: удаляем столбец max_tasks из таблицы users (если он ещё существует)
             try:
                 await conn.execute(text(
-                    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'max_tasks') THEN"
-                    "ALTER TABLE users DROP COLUMN max_tasks; END IF; END $$;"
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1
+                            FROM information_schema.columns
+                            WHERE table_name = 'users'
+                              AND column_name = 'max_tasks'
+                        ) THEN
+                            ALTER TABLE users DROP COLUMN max_tasks;
+                        END IF;
+                    END $$;
+                    """
                 ))
-                logger.info("✅ Миграция: столбец max_tasks удален из таблицы users")
+                logger.info("✅ Миграция: столбец max_tasks удален из таблицы users (если существовал)")
             except Exception as e:
                 logger.warning(f"⚠️ Ошибка при удалении столбца max_tasks: {e}")
+
+            # Миграция: добавляем столбец is_available для исполнителей
+            try:
+                await conn.execute(text(
+                    """
+                    ALTER TABLE users
+                    ADD COLUMN IF NOT EXISTS is_available BOOLEAN NOT NULL DEFAULT TRUE;
+                    """
+                ))
+                logger.info("✅ Миграция: столбец is_available добавлен в таблицу users")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при добавлении столбца is_available: {e}")
+
+            # Миграция: индекс для быстрого поиска доступных исполнителей
+            try:
+                await conn.execute(text(
+                    """
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1
+                            FROM pg_class c
+                            JOIN pg_namespace n ON n.oid = c.relnamespace
+                            WHERE c.relname = 'idx_users_role_available'
+                              AND c.relkind = 'i'
+                        ) THEN
+                            CREATE INDEX idx_users_role_available
+                                ON users (role, is_available);
+                        END IF;
+                    END $$;
+                    """
+                ))
+                logger.info("✅ Миграция: индекс idx_users_role_available создан (или уже существовал)")
+            except Exception as e:
+                logger.warning(f"⚠️ Ошибка при создании индекса idx_users_role_available: {e}")
 
     except Exception as e:
         logger.warning(f"⚠️ Ошибка при выполнении миграций: {type(e).__name__}: {str(e)}")

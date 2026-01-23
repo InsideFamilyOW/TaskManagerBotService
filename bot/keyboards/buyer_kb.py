@@ -90,22 +90,17 @@ class BuyerKeyboards:
     
     @staticmethod
     def executor_list(executors: List[User], direction: DirectionType = None, is_editing: bool = False, task_id: int = None) -> InlineKeyboardMarkup:
-        """Список исполнителей с их загрузкой"""
+        """Список исполнителей"""
         builder = InlineKeyboardBuilder()
         
         for executor in executors:
-            # Определяем статус загрузки
-            if executor.current_load == 0:
-                status = "🟢 свободен"
-            elif executor.current_load < 3:
-                status = f"🟡 занято: {executor.current_load}"
-            else:
-                status = f"🔴 занято: {executor.current_load}"
-            
             name = f"{executor.first_name or 'User'} {executor.last_name or ''}".strip()
+            # Показываем количество задач
+            tasks_count = executor.current_load or 0
+            text = f"👤 {name} • задач: {tasks_count}"
             
             builder.button(
-                text=f"👤 {name} ({status})",
+                text=text,
                 callback_data=f"buyer_select_executor_{executor.id}"
             )
         
@@ -124,18 +119,13 @@ class BuyerKeyboards:
         builder = InlineKeyboardBuilder()
         
         for executor in executors:
-            # Определяем статус загрузки
-            if executor.current_load == 0:
-                status = "🟢 свободен"
-            elif executor.current_load < 3:
-                status = f"🟡 занято: {executor.current_load}"
-            else:
-                status = f"🔴 занято: {executor.current_load}"
-            
             name = f"{executor.first_name or 'User'} {executor.last_name or ''}".strip()
+            # Показываем количество задач
+            tasks_count = executor.current_load or 0
+            text = f"👤 {name} • задач: {tasks_count}"
             
             builder.button(
-                text=f"👤 {name} ({status})",
+                text=text,
                 callback_data=f"buyer_select_executor_{executor.id}"
             )
         
@@ -150,18 +140,13 @@ class BuyerKeyboards:
         builder = InlineKeyboardBuilder()
         
         for executor in executors:
-            # Определяем статус загрузки
-            if executor.current_load == 0:
-                status = "🟢 свободен"
-            elif executor.current_load < 3:
-                status = f"🟡 занято: {executor.current_load}"
-            else:
-                status = f"🔴 занято: {executor.current_load}"
-            
             name = f"{executor.first_name or 'User'} {executor.last_name or ''}".strip()
+            # Показываем количество задач
+            tasks_count = executor.current_load or 0
+            text = f"👤 {name} • задач: {tasks_count}"
             
             builder.button(
-                text=f"👤 {name} ({status})",
+                text=text,
                 callback_data=f"buyer_select_executor_{executor.id}"
             )
         

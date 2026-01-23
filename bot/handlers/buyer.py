@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 import re
-
+from aiogram.filters import or_f
 from db.engine import AsyncSessionLocal
 from db.queries import UserQueries, TaskQueries, MessageQueries, FileQueries, LogQueries
 from db.models import UserRole, DirectionType, TaskStatus, TaskPriority, FileType
@@ -16,15 +16,18 @@ from states.buyer_states import BuyerStates
 from bot.utils.file_handler import FileHandler
 from bot.utils.photo_handler import PhotoHandler
 from bot.utils.log_channel import LogChannel
+from bot.services.executor_status_service import ExecutorStatusService
 from log import logger
 
 # Импортируем обработчики файлов
 from . import buyer_files
+from . import buyer_profile
 
 router = Router()
 
 # Подключаем роутер файлов
 router.include_router(buyer_files.router)
+router.include_router(buyer_profile.router)
 
 
 # ============ СОЗДАНИЕ ЗАДАЧИ ============
@@ -39,8 +42,10 @@ async def buyer_create_task(message: Message, state: FSMContext):
             await message.answer("❌ У вас нет доступа к этой функции")
             return
         
-        # Получаем назначенных исполнителей для этого баера
+        # Получаем назначенных И ДОСТУПНЫХ исполнителей для этого баера
         assigned_executors = await UserQueries.get_executors_for_buyer(session, user.id)
+        # Отдельно получаем вообще всех закреплённых (даже если сейчас недоступны)
+        all_assigned_executors = await UserQueries.get_all_assigned_executors_for_buyer(session, user.id)
         
         # Группируем по направлениям только назначенных исполнителей
         executors_by_direction: Dict[DirectionType, List] = {}
@@ -51,11 +56,46 @@ async def buyer_create_task(message: Message, state: FSMContext):
                 executors_by_direction[executor.direction].append(executor)
         
         if not executors_by_direction:
-            await message.answer(
-                "❌ <b>Нет доступных исполнителей</b>\n\n"
-                "Вам не назначены исполнители. Обратитесь к администратору для назначения исполнителей.",
-                parse_mode="HTML"
-            )
+            # Если есть закреплённые, но среди них сейчас нет доступных — покажем их
+            if all_assigned_executors:
+                names_lines = []
+                for ex in all_assigned_executors:
+                    name = f"{ex.first_name or 'User'} {ex.last_name or ''}".strip()
+                    names_lines.append(f"• {name}")
+                names_text = "\n".join(names_lines)
+
+                from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+                kb = InlineKeyboardBuilder()
+                for ex in all_assigned_executors:
+                    name = f"{ex.first_name or 'User'} {ex.last_name or ''}".strip()
+                    kb.button(
+                        text=f"👤 {name}",
+                        callback_data=f"buyer_exec_profile_{ex.id}",
+                    )
+                kb.adjust(1)
+
+                await message.answer(
+                    "❌ <b>Нет доступных исполнителей</b>\n\n"
+                    "Сейчас у вас нет <b>свободных</b> исполнителей для создания новой задачи.\n\n"
+                    "<b>За вами закреплены исполнители:</b>\n"
+                    f"{names_text}\n\n"
+                    "Но в данный момент они уже заняты другими задачами.\n\n"
+                    "Как только один из исполнителей освободится, вам придёт уведомление,\n"
+                    "и вы сможете создать для него новую задачу.\n\n"
+                    "Вы также можете открыть профиль исполнителя и посмотреть его задачи:",
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML"
+                )
+            else:
+                # Вообще нет назначенных исполнителей
+                await message.answer(
+                    "❌ <b>Нет доступных исполнителей</b>\n\n"
+                    "Сейчас у вас нет <b>назначенных</b> исполнителей.\n\n"
+                    "Обратитесь к администратору, чтобы вам назначили исполнителей,\n"
+                    "после чего вы сможете создавать для них задачи.",
+                    parse_mode="HTML"
+                )
             return
         
         # Сохраняем данные исполнителей
@@ -348,10 +388,24 @@ async def process_executor_selection(callback: CallbackQuery, state: FSMContext)
     else:
         # Создание новой задачи
         async with AsyncSessionLocal() as session:
+            buyer = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
             executor = await UserQueries.get_user_by_id(session, executor_id)
-            
-            if not executor:
+
+            if not executor or not buyer:
                 await callback.answer("❌ Исполнитель не найден")
+                return
+
+            # Проверяем, не занят ли исполнитель
+            # Исполнитель считается занятым только если он недоступен (is_available=False)
+            # и у него есть задачи в работе
+            is_busy = await ExecutorStatusService.is_executor_busy(session, executor_id)
+            if is_busy:
+                await callback.answer(
+                    "⏳ Исполнитель занят и работает над другими задачами.\n\n"
+                    "Новую задачу можно назначить только после завершения текущих.\n"
+                    "Вы получите уведомление, когда исполнитель освободится.",
+                    show_alert=True,
+                )
                 return
             
             # Сохраняем направление исполнителя, если оно еще не было сохранено
@@ -641,7 +695,6 @@ async def confirm_create_task(callback: CallbackQuery, state: FSMContext, bot: B
                     # Для больших файлов (>20MB) сохраняем только file_id
                     MAX_SIZE_FOR_BASE64 = 20 * 1024 * 1024  # 20 MB
                     file_size_from_info = file_info.get('file_size', 0)
-                    from log import logger
                     
                     try:
                         # Если файл больше 20MB или является видео, сохраняем только file_id

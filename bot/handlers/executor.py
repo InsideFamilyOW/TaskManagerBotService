@@ -13,9 +13,11 @@ from states.executor_states import ExecutorStates
 from bot.utils.file_handler import FileHandler
 from bot.utils.photo_handler import PhotoHandler
 from bot.utils.log_channel import LogChannel
+from bot.services.executor_status_service import ExecutorStatusService
 from log import logger
 
 router = Router()
+
 
 
 async def _can_executor_reject_task(session, task_id: int, executor_telegram_id: int) -> bool:
@@ -94,10 +96,10 @@ async def executor_new_tasks(message: Message, state: FSMContext):
             await message.answer("❌ У вас нет доступа к этой функции")
             return
         
-        # Получаем новые задачи (PENDING) с учетом назначений баеров
-        tasks = await TaskQueries.get_available_tasks_for_executor(session, user.id, status=TaskStatus.PENDING)
+        # Быстрый подсчет новых задач (PENDING)
+        pending_count = await TaskQueries.count_available_tasks_for_executor(session, user.id, status=TaskStatus.PENDING)
         
-        if not tasks:
+        if pending_count == 0:
             await message.answer(
                 "📭 <b>НЕТ НОВЫХ ЗАДАЧ</b>\n\n"
                 "У вас пока нет новых назначенных задач.",
@@ -105,20 +107,54 @@ async def executor_new_tasks(message: Message, state: FSMContext):
             )
             return
         
+        # Загружаем только первую страницу новых задач
+        page = 1
+        per_page = 5
+        tasks = await TaskQueries.get_available_tasks_for_executor(
+            session, user.id, status=TaskStatus.PENDING, page=page, per_page=per_page
+        )
+        
         text = f"""
 🆕 <b>НОВЫЕ ЗАДАЧИ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Найдено новых задач: {len(tasks)}
+Найдено новых задач: {pending_count}
 
 Выберите задачу для просмотра:
 """
         
         await message.answer(
             text,
-            reply_markup=ExecutorKeyboards.task_list(tasks),
+            reply_markup=ExecutorKeyboards.task_list(tasks, page=page, per_page=per_page, total_count=pending_count, is_new_tasks=True),
             parse_mode="HTML"
         )
+
+
+@router.callback_query(F.data == "executor_toggle_availability")
+async def toggle_executor_availability(callback: CallbackQuery):
+    """Переключение статуса 'Работаю / Не работаю' исполнителем из профиля"""
+    async with AsyncSessionLocal() as session:
+        # Берем пользователя без фильтрации по is_active, чтобы не сломать переключение
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id, active_only=False)
+
+        if not user or user.role != UserRole.EXECUTOR:
+            await callback.answer("❌ Доступно только для исполнителей", show_alert=True)
+            return
+
+        # Переключаем флаг
+        current = getattr(user, "is_available", True)
+        user.is_available = not current
+        await session.commit()
+
+        # Обновляем только клавиатуру под сообщением профиля
+        from bot.keyboards.executor_kb import ExecutorKeyboards
+        await callback.message.edit_reply_markup(
+            reply_markup=ExecutorKeyboards.profile_actions(user.is_available)
+        )
+
+        status_text = "Теперь вы <b>работаете</b> и можете получать новые задачи" if user.is_available \
+            else "Теперь вы <b>не принимаете новые задачи</b>. Баеры не увидят вас при создании новых задач."
+        await callback.answer(status_text, show_alert=False)
 
 
 @router.callback_query(F.data == "executor_my_tasks")
@@ -173,6 +209,69 @@ async def callback_executor_my_tasks(callback: CallbackQuery, state: FSMContext)
         await callback.message.edit_text(
             text,
             reply_markup=ExecutorKeyboards.task_list(tasks, page=page, per_page=per_page, total_count=active_count),
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("executor_new_tasks_page_"))
+async def callback_executor_new_tasks_page(callback: CallbackQuery, state: FSMContext):
+    """Перелистывание страниц новых задач исполнителя"""
+    await state.clear()
+    
+    try:
+        page = int(callback.data.replace("executor_new_tasks_page_", ""))
+    except ValueError:
+        await callback.answer("❌ Ошибка перелистывания")
+        return
+    
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.EXECUTOR:
+            await callback.answer("❌ У вас нет доступа к этой функции")
+            return
+        
+        # Быстрый подсчет новых задач (PENDING)
+        pending_count = await TaskQueries.count_available_tasks_for_executor(session, user.id, status=TaskStatus.PENDING)
+        
+        if pending_count == 0:
+            await callback.message.edit_text(
+                "📭 <b>НЕТ НОВЫХ ЗАДАЧ</b>\n\n"
+                "У вас пока нет новых назначенных задач.",
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
+        
+        # Загружаем только запрошенную страницу
+        per_page = 5
+        
+        # Проверяем валидность страницы
+        total_pages = (pending_count + per_page - 1) // per_page
+        if page < 1:
+            page = 1
+        elif page > total_pages:
+            page = total_pages
+        
+        # Загружаем задачи для текущей страницы
+        tasks = await TaskQueries.get_available_tasks_for_executor(
+            session, user.id, status=TaskStatus.PENDING, page=page, per_page=per_page
+        )
+        
+        text = f"""
+🆕 <b>НОВЫЕ ЗАДАЧИ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Найдено новых задач: {pending_count}
+
+Выберите задачу для просмотра:
+"""
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=ExecutorKeyboards.task_list(tasks, page=page, per_page=per_page, total_count=pending_count, is_new_tasks=True),
             parse_mode="HTML"
         )
     
@@ -832,7 +931,17 @@ async def confirm_send_completion(callback: CallbackQuery, state: FSMContext, bo
         # Обновляем задачу
         task.completion_comment = data.get('completion_comment')
         old_status = task.status
-        await TaskQueries.update_task_status(session, task_id, TaskStatus.COMPLETED, executor.id, "Задача выполнена")
+        await TaskQueries.update_task_status(
+            session,
+            task_id,
+            TaskStatus.COMPLETED,
+            executor.id,
+            "Задача выполнена",
+        )
+
+        # Если после завершения задачи у исполнителя не осталось задач в работе,
+        # уведомляем всех баеров, которым он назначен
+        await ExecutorStatusService.notify_buyers_if_executor_free(bot, session, executor.id)
         
         # Сохраняем файлы в БД
         files_info = data.get('completion_files', [])

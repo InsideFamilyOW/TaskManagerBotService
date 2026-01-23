@@ -115,6 +115,8 @@ class User(Base):
     # Для исполнителей (оптимизировано)
     direction = Column(Enum(DirectionType, name='direction_type'), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
+    # Флаг, принимает ли исполнитель сейчас новые задачи (отключается кнопкой в профиле)
+    is_available = Column(Boolean, default=True, nullable=False, index=True)
     current_load = Column(SmallInteger, default=0)  # Текущая загрузка
     load_level = Column(Enum(ExecutorLoad, name='executor_load'),
                         default=ExecutorLoad.FREE, index=True)
@@ -153,6 +155,7 @@ class User(Base):
     __table_args__ = (
         Index("idx_users_telegram_active", "telegram_id", "is_active"),
         Index("idx_users_direction_load", "direction", "load_level"),
+        Index("idx_users_role_available", "role", "is_available"),
         CheckConstraint("current_load >= 0", name="check_load_min"),
     )
 

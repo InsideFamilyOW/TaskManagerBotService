@@ -21,6 +21,20 @@ class ExecutorKeyboards:
         return builder.as_markup(resize_keyboard=True)
     
     @staticmethod
+    def profile_actions(is_available: bool) -> InlineKeyboardMarkup:
+        """
+        Кнопки под профилем исполнителя.
+        Позволяют переключать статус "Работаю / Не работаю".
+        """
+        builder = InlineKeyboardBuilder()
+        if is_available:
+            builder.button(text="🟢 Работаю (принимаю задачи)", callback_data="executor_toggle_availability")
+        else:
+            builder.button(text="🔴 Не работаю (не принимать задачи)", callback_data="executor_toggle_availability")
+        builder.adjust(1)
+        return builder.as_markup()
+    
+    @staticmethod
     def new_task_notification(task_id: int, can_reject: bool = True) -> InlineKeyboardMarkup:
         """Уведомление о новой задаче"""
         builder = InlineKeyboardBuilder()
@@ -117,7 +131,7 @@ class ExecutorKeyboards:
         return builder.as_markup()
     
     @staticmethod
-    def task_list(tasks: List[Task], page: int = 1, per_page: int = 5, total_count: int = None) -> InlineKeyboardMarkup:
+    def task_list(tasks: List[Task], page: int = 1, per_page: int = 5, total_count: int = None, is_new_tasks: bool = False) -> InlineKeyboardMarkup:
         """Список задач исполнителя (оптимизировано)"""
         builder = InlineKeyboardBuilder()
         
@@ -154,11 +168,13 @@ class ExecutorKeyboards:
         total_pages = (total_count + per_page - 1) // per_page
         nav_buttons = []
         if total_pages > 1:
+            # Используем разные callback в зависимости от типа списка
+            page_prefix = "executor_new_tasks_page_" if is_new_tasks else "executor_tasks_page_"
             if page > 1:
-                nav_buttons.append(("◀️", f"executor_tasks_page_{page-1}"))
+                nav_buttons.append(("◀️", f"{page_prefix}{page-1}"))
             nav_buttons.append((f"{page}/{total_pages}", "page_info"))
             if page < total_pages:
-                nav_buttons.append(("▶️", f"executor_tasks_page_{page+1}"))
+                nav_buttons.append(("▶️", f"{page_prefix}{page+1}"))
             
             for text, callback in nav_buttons:
                 builder.button(text=text, callback_data=callback)
