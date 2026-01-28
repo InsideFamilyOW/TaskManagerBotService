@@ -13,6 +13,7 @@ from bot.keyboards.admin_kb import AdminKeyboards
 from bot.keyboards.common_kb import CommonKeyboards
 from states.admin_states import AdminStates
 from bot.utils.log_channel import LogChannel
+from bot.utils.message_utils import truncate_description_in_preview, TELEGRAM_MAX_MESSAGE_LENGTH
 from log import logger
 
 router = Router()
@@ -1665,7 +1666,8 @@ async def callback_admin_task_details(callback: CallbackQuery):
         )
         corrections_count = corrections_result.scalar() or 0
         
-        text = f"""
+        # Формируем шаблон с плейсхолдером для описания
+        text_template = f"""
 📊 <b>ДЕТАЛИ ЗАДАЧИ {task.task_number}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1680,7 +1682,7 @@ async def callback_admin_task_details(callback: CallbackQuery):
 {execution_time}
 
 📝 <b>Описание:</b>
-{task.description}
+{{description}}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1700,6 +1702,17 @@ async def callback_admin_task_details(callback: CallbackQuery):
 📅 <b>Создана:</b> {task.created_at.strftime("%d.%m.%Y %H:%M")}
 """
         
+        # Обрезаем описание, если сообщение слишком длинное
+        description = task.description or "Без описания"
+        text, was_truncated = truncate_description_in_preview(
+            description=description,
+            base_text_template=text_template,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH
+        )
+        
+        if was_truncated:
+            logger.warning(f"Описание задачи {task.task_number} было обрезано в админ-панели (длина описания: {len(description)})")
+        
         if task.started_at:
             text += f"▶️ <b>Начата:</b> {task.started_at.strftime("%d.%m.%Y %H:%M")}\n"
         
@@ -1707,6 +1720,10 @@ async def callback_admin_task_details(callback: CallbackQuery):
             text += f"✅ <b>Завершена:</b> {task.completed_at.strftime("%d.%m.%Y %H:%M")}\n"
         
         text += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Проверяем финальную длину и обрезаем, если нужно
+        from bot.utils.message_utils import truncate_text_if_needed
+        text = truncate_text_if_needed(text, TELEGRAM_MAX_MESSAGE_LENGTH)
         
         await callback.message.edit_text(
             text,

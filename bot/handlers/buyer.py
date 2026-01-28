@@ -16,6 +16,13 @@ from states.buyer_states import BuyerStates
 from bot.utils.file_handler import FileHandler
 from bot.utils.photo_handler import PhotoHandler
 from bot.utils.log_channel import LogChannel
+from bot.utils.message_utils import (
+    truncate_description_in_preview, 
+    truncate_text_if_needed, 
+    check_message_length,
+    get_max_description_length,
+    TELEGRAM_MAX_MESSAGE_LENGTH
+)
 from bot.services.executor_status_service import ExecutorStatusService
 from log import logger
 
@@ -449,7 +456,8 @@ async def show_task_preview(message: Message, state: FSMContext, is_edit: bool =
     
     deadline_str = data['deadline'].strftime("%d.%m.%Y %H:%M") if data.get('deadline') else "Не указан"
     
-    text = f"""
+    # Формируем шаблон текста с плейсхолдером для описания
+    text_template = f"""
 📋 <b>ПРЕВЬЮ ЗАДАЧИ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -459,7 +467,7 @@ async def show_task_preview(message: Message, state: FSMContext, is_edit: bool =
 📌 <b>Название:</b> {data['title']}
 
 📝 <b>Описание:</b>
-{data['description']}
+{{description}}
 
 📍 <b>Приоритет:</b> {priority_names[data['priority']-1]}
 ⏱️ <b>Дедлайн:</b> {deadline_str}
@@ -468,6 +476,61 @@ async def show_task_preview(message: Message, state: FSMContext, is_edit: bool =
 
 Задача будет отправлена исполнителю в ЛС бота
 """
+    
+    # Проверяем длину сообщения
+    description = data.get('description', '')
+    exceeds_limit, message_length = check_message_length(
+        description=description,
+        base_text_template=text_template,
+        max_length=TELEGRAM_MAX_MESSAGE_LENGTH
+    )
+    
+    if exceeds_limit:
+        # Показываем предупреждение вместо превью
+        max_desc_length = get_max_description_length(text_template, TELEGRAM_MAX_MESSAGE_LENGTH)
+        warning_text = f"""
+⚠️ <b>СООБЩЕНИЕ СЛИШКОМ ДЛИННОЕ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ваше описание задачи слишком длинное ({len(description)} символов).
+
+Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов.
+
+<b>Максимальная длина описания:</b> ~{max_desc_length} символов
+<b>Текущая длина описания:</b> {len(description)} символов
+<b>Превышение:</b> {message_length - TELEGRAM_MAX_MESSAGE_LENGTH} символов
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Пожалуйста, сократите описание задачи и попробуйте снова.</b>
+
+Вы можете вернуться к редактированию описания, нажав кнопку ниже.
+"""
+        
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✏️ Редактировать описание", callback_data="buyer_edit_task")
+        builder.button(text="⬅️ Назад", callback_data="buyer_back_to_confirm")
+        builder.adjust(1)
+        
+        if is_edit:
+            await message.edit_text(
+                warning_text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                warning_text,
+                reply_markup=builder.as_markup(),
+                parse_mode="HTML"
+            )
+        
+        logger.warning(f"Попытка создать задачу с слишком длинным описанием (длина: {len(description)}, сообщение: {message_length})")
+        return  # Не переходим к подтверждению
+    
+    # Формируем финальный текст
+    text = text_template.format(description=description)
     
     # Если это редактирование (вызов из callback), используем edit_text, иначе answer
     if is_edit:
@@ -531,10 +594,45 @@ async def edit_field_title(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "edit_field_description", BuyerStates.waiting_task_confirmation)
 async def edit_field_description(callback: CallbackQuery, state: FSMContext):
     """Редактирование описания"""
+    # Вычисляем максимальную длину описания для превью
+    data = await state.get_data()
+    direction_names = {
+        DirectionType.DESIGN: "🎨 Дизайн",
+        DirectionType.AGENCY: "🏢 Агенство",
+        DirectionType.COPYWRITING: "✍️ Копирайтинг",
+        DirectionType.MARKETING: "📱 Маркетинг"
+    }
+    priority_names = ["🟢 Низкий", "🟡 Средний", "🟠 Высокий", "🔴 Срочный"]
+    deadline_str = data.get('deadline').strftime("%d.%m.%Y %H:%M") if data.get('deadline') else "Не указан"
+    
+    preview_template_for_check = f"""
+📋 <b>ПРЕВЬЮ ЗАДАЧИ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 <b>Направление:</b> {direction_names.get(data.get('direction'), '')}
+👤 <b>Исполнитель:</b> {data.get('executor_name', '')}
+
+📌 <b>Название:</b> {data.get('title', '')}
+
+📝 <b>Описание:</b>
+{{description}}
+
+📍 <b>Приоритет:</b> {priority_names[data.get('priority', 1)-1]}
+⏱️ <b>Дедлайн:</b> {deadline_str}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Задача будет отправлена исполнителю в ЛС бота
+"""
+    max_desc_length = get_max_description_length(preview_template_for_check, TELEGRAM_MAX_MESSAGE_LENGTH)
+    
     await callback.message.edit_text(
-        "📝 <b>ИЗМЕНЕНИЕ ОПИСАНИЯ</b>\n\n"
-        "Введите новое описание задачи:",
-        parse_mode="HTML"
+        f"📝 <b>ИЗМЕНЕНИЕ ОПИСАНИЯ</b>\n\n"
+        f"Введите новое описание задачи:\n\n"
+        f"⚠️ <b>Ограничение:</b> Максимальная длина описания ~{max_desc_length} символов\n"
+        f"(Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов)",
+        parse_mode="HTML",
+        reply_markup=CommonKeyboards.cancel()
     )
     await state.set_state(BuyerStates.waiting_task_description)
     await callback.answer()
@@ -1052,7 +1150,8 @@ async def callback_view_task(callback: CallbackQuery):
         # Получаем время выполнения
         execution_time = get_execution_time_display(task)
         
-        text = f"""
+        # Формируем шаблон с плейсхолдером для описания
+        text_template = f"""
 📋 <b>ЗАДАЧА {task.task_number}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1066,12 +1165,23 @@ async def callback_view_task(callback: CallbackQuery):
 {execution_time}
 
 📝 <b>Описание:</b>
-{task.description}
+{{description}}
 
 📅 <b>Создана:</b> {task.created_at.strftime("%d.%m.%Y %H:%M")}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
+        
+        # Обрезаем описание, если сообщение слишком длинное
+        description = task.description or "Без описания"
+        text, was_truncated = truncate_description_in_preview(
+            description=description,
+            base_text_template=text_template,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH
+        )
+        
+        if was_truncated:
+            logger.warning(f"Описание задачи {task.task_number} было обрезано при показе (длина описания: {len(description)})")
         
         executor_id = task.executor.id if task.executor else None
         await callback.message.edit_text(
@@ -1908,9 +2018,8 @@ async def process_message_to_executor(message: Message, state: FSMContext, bot: 
                 deadline_str = task.deadline.strftime("%d.%m.%Y %H:%M") if task.deadline else "Не указан"
                 description_text = task.description or "Без описания"
 
-                await bot.send_message(
-                    target_executor.telegram_id,
-                    f"""
+                # Формируем шаблон сообщения с плейсхолдерами
+                message_template = f"""
 💬 <b>СООБЩЕНИЕ ОТ БАЙЕРА</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1921,16 +2030,29 @@ async def process_message_to_executor(message: Message, state: FSMContext, bot: 
 ⏱️ <b>Дедлайн:</b> {deadline_str}
 
 📝 <b>Описание:</b>
-{description_text}
+{{description}}
 
 👤 <b>От:</b> {buyer.first_name} {buyer.last_name or ''}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-{content}
+{{content}}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-""",
+"""
+                
+                # Формируем полный текст с описанием и контентом
+                full_text = message_template.format(description=description_text, content=content)
+                
+                # Обрезаем текст, если он слишком длинный
+                final_text = truncate_text_if_needed(full_text, TELEGRAM_MAX_MESSAGE_LENGTH)
+                
+                if len(final_text) < len(full_text):
+                    logger.warning(f"Сообщение байера было обрезано при отправке исполнителю (длина: {len(full_text)})")
+
+                await bot.send_message(
+                    target_executor.telegram_id,
+                    final_text,
                     parse_mode="HTML",
                     reply_markup=builder.as_markup()
                 )
@@ -1977,7 +2099,8 @@ async def show_task_view_from_message(message: Message, task_id: int):
         # Получаем время выполнения
         execution_time = get_execution_time_display(task)
         
-        text = f"""
+        # Формируем шаблон с плейсхолдером для описания
+        text_template = f"""
 📋 <b>ЗАДАЧА {task.task_number}</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1991,12 +2114,23 @@ async def show_task_view_from_message(message: Message, task_id: int):
 {execution_time}
 
 📝 <b>Описание:</b>
-{task.description}
+{{description}}
 
 📅 <b>Создана:</b> {task.created_at.strftime("%d.%m.%Y %H:%M")}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
+        
+        # Обрезаем описание, если сообщение слишком длинное
+        description = task.description or "Без описания"
+        text, was_truncated = truncate_description_in_preview(
+            description=description,
+            base_text_template=text_template,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH
+        )
+        
+        if was_truncated:
+            logger.warning(f"Описание задачи {task.task_number} было обрезано при показе (длина описания: {len(description)})")
         
         executor_id = task.executor.id if task.executor else None
         await message.answer(
@@ -2054,9 +2188,15 @@ async def edit_existing_task_title(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "edit_field_description", BuyerStates.waiting_edit_field)
 async def edit_existing_task_description(callback: CallbackQuery, state: FSMContext):
     """Редактирование описания существующей задачи"""
+    # Примерная максимальная длина описания для просмотра задачи
+    template_length = 300
+    max_desc_length = TELEGRAM_MAX_MESSAGE_LENGTH - template_length - 50
+    
     await callback.message.edit_text(
-        "📝 <b>ИЗМЕНЕНИЕ ОПИСАНИЯ</b>\n\n"
-        "Введите новое описание задачи:",
+        f"📝 <b>ИЗМЕНЕНИЕ ОПИСАНИЯ</b>\n\n"
+        f"Введите новое описание задачи:\n\n"
+        f"⚠️ <b>Ограничение:</b> Максимальная длина описания ~{max_desc_length} символов\n"
+        f"(Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов)",
         parse_mode="HTML"
     )
     await state.set_state(BuyerStates.waiting_task_description)
@@ -2195,6 +2335,37 @@ async def save_edited_task_title(message: Message, state: FSMContext):
         # Создание новой задачи (существующая логика)
         await state.update_data(title=title)
         
+        # Вычисляем максимальную длину описания для превью
+        direction_names = {
+            DirectionType.DESIGN: "🎨 Дизайн",
+            DirectionType.AGENCY: "🏢 Агенство",
+            DirectionType.COPYWRITING: "✍️ Копирайтинг",
+            DirectionType.MARKETING: "📱 Маркетинг"
+        }
+        priority_names = ["🟢 Низкий", "🟡 Средний", "🟠 Высокий", "🔴 Срочный"]
+        deadline_str = data.get('deadline').strftime("%d.%m.%Y %H:%M") if data.get('deadline') else "Не указан"
+        
+        preview_template_for_check = f"""
+📋 <b>ПРЕВЬЮ ЗАДАЧИ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 <b>Направление:</b> {direction_names.get(data.get('direction'), '')}
+👤 <b>Исполнитель:</b> {data.get('executor_name', '')}
+
+📌 <b>Название:</b> {data.get('title', '')}
+
+📝 <b>Описание:</b>
+{{description}}
+
+📍 <b>Приоритет:</b> {priority_names[data.get('priority', 1)-1]}
+⏱️ <b>Дедлайн:</b> {deadline_str}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Задача будет отправлена исполнителю в ЛС бота
+"""
+        max_desc_length = get_max_description_length(preview_template_for_check, TELEGRAM_MAX_MESSAGE_LENGTH)
+        
         text = f"""
 ✅ <b>Название задачи принято</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -2205,6 +2376,9 @@ async def save_edited_task_title(message: Message, state: FSMContext):
 • Что нужно сделать
 • Требования к результату
 • Дополнительные пожелания
+
+⚠️ <b>Ограничение:</b> Максимальная длина описания ~{max_desc_length} символов
+(Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов)
 """
         
         await message.answer(
@@ -2225,6 +2399,57 @@ async def save_edited_task_description(message: Message, state: FSMContext):
     
     if task_id:
         # Редактирование существующей задачи
+        # Проверяем длину описания для шаблона просмотра задачи
+        # Примерный шаблон для проверки (без реальных данных задачи)
+        preview_template = """
+📋 <b>ЗАДАЧА {task_number}</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📌 <b>Название:</b> {title}
+🏷️ <b>Статус:</b> {status}
+📍 <b>Приоритет:</b> {priority}
+
+👤 <b>Исполнитель:</b> {executor}
+⏱️ <b>Дедлайн:</b> {deadline}
+
+{execution_time}
+
+📝 <b>Описание:</b>
+{description}
+
+📅 <b>Создана:</b> {created_at}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        # Примерная длина шаблона без описания (около 250-300 символов)
+        template_length = 300
+        max_desc_length = TELEGRAM_MAX_MESSAGE_LENGTH - template_length - 50  # Запас
+        
+        if len(description) > max_desc_length:
+            warning_text = f"""
+⚠️ <b>ОПИСАНИЕ СЛИШКОМ ДЛИННОЕ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ваше описание задачи слишком длинное ({len(description)} символов).
+
+Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов.
+
+<b>Максимальная длина описания:</b> ~{max_desc_length} символов
+<b>Текущая длина описания:</b> {len(description)} символов
+<b>Превышение:</b> {len(description) - max_desc_length} символов
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Пожалуйста, сократите описание и попробуйте снова.</b>
+"""
+            await message.answer(
+                warning_text,
+                reply_markup=CommonKeyboards.cancel(),
+                parse_mode="HTML"
+            )
+            logger.warning(f"Попытка сохранить слишком длинное описание для задачи {task_id} (длина: {len(description)})")
+            return
+        
         async with AsyncSessionLocal() as session:
             task = await TaskQueries.get_task_by_id(session, task_id)
             if task:
@@ -2241,7 +2466,72 @@ async def save_edited_task_description(message: Message, state: FSMContext):
         
         await state.clear()
     else:
-        # Создание новой задачи (существующая логика)
+        # Создание новой задачи - проверяем длину для превью
+        # Формируем шаблон превью для проверки
+        direction_names = {
+            DirectionType.DESIGN: "🎨 Дизайн",
+            DirectionType.AGENCY: "🏢 Агенство",
+            DirectionType.COPYWRITING: "✍️ Копирайтинг",
+            DirectionType.MARKETING: "📱 Маркетинг"
+        }
+        priority_names = ["🟢 Низкий", "🟡 Средний", "🟠 Высокий", "🔴 Срочный"]
+        
+        deadline_str = data.get('deadline').strftime("%d.%m.%Y %H:%M") if data.get('deadline') else "Не указан"
+        
+        preview_template = f"""
+📋 <b>ПРЕВЬЮ ЗАДАЧИ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 <b>Направление:</b> {direction_names.get(data.get('direction'), '')}
+👤 <b>Исполнитель:</b> {data.get('executor_name', '')}
+
+📌 <b>Название:</b> {data.get('title', '')}
+
+📝 <b>Описание:</b>
+{{description}}
+
+📍 <b>Приоритет:</b> {priority_names[data.get('priority', 1)-1]}
+⏱️ <b>Дедлайн:</b> {deadline_str}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Задача будет отправлена исполнителю в ЛС бота
+"""
+        
+        # Проверяем длину
+        exceeds_limit, message_length = check_message_length(
+            description=description,
+            base_text_template=preview_template,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH
+        )
+        
+        if exceeds_limit:
+            max_desc_length = get_max_description_length(preview_template, TELEGRAM_MAX_MESSAGE_LENGTH)
+            warning_text = f"""
+⚠️ <b>ОПИСАНИЕ СЛИШКОМ ДЛИННОЕ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ваше описание задачи слишком длинное ({len(description)} символов).
+
+Telegram не позволяет отправлять сообщения длиннее {TELEGRAM_MAX_MESSAGE_LENGTH} символов.
+
+<b>Максимальная длина описания:</b> ~{max_desc_length} символов
+<b>Текущая длина описания:</b> {len(description)} символов
+<b>Превышение:</b> {message_length - TELEGRAM_MAX_MESSAGE_LENGTH} символов
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<b>Пожалуйста, сократите описание и попробуйте снова.</b>
+"""
+            await message.answer(
+                warning_text,
+                reply_markup=CommonKeyboards.cancel(),
+                parse_mode="HTML"
+            )
+            logger.warning(f"Попытка создать задачу с слишком длинным описанием (длина: {len(description)}, сообщение: {message_length})")
+            return
+        
+        # Сохраняем описание
         await state.update_data(description=description)
         
         text = """
