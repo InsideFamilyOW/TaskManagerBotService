@@ -9,6 +9,7 @@ from sqlalchemy.sql import func
 from db.engine import AsyncSessionLocal
 from db.queries import UserQueries, TaskQueries
 from db.queries.chat_queries import ChatQueries
+from db.queries.channel_queries import ChannelQueries
 from db.models import UserRole, DirectionType, TaskStatus
 from bot.keyboards.admin_kb import AdminKeyboards
 from bot.keyboards.buyer_kb import BuyerKeyboards
@@ -520,65 +521,126 @@ async def handle_my_chat_member(event: ChatMemberUpdated):
             can_manage_video_chats = getattr(event.new_chat_member, "can_manage_video_chats", False)
         
         async with AsyncSessionLocal() as session:
-            # Сохраняем или обновляем чат в БД
-            # Сохраняем только если бот добавлен как member или administrator
-            if new_status in ["member", "administrator"]:
-                chat_obj = await ChatQueries.add_or_update_chat(
-                    session=session,
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    chat_title=chat_title,
-                    bot_status=new_status,
-                    can_post_messages=can_post_messages,
-                    can_edit_messages=can_edit_messages,
-                    can_delete_messages=can_delete_messages,
-                    can_restrict_members=can_restrict_members,
-                    can_promote_members=can_promote_members,
-                    can_change_info=can_change_info,
-                    can_invite_users=can_invite_users,
-                    can_pin_messages=can_pin_messages,
-                    can_manage_chat=can_manage_chat,
-                    can_manage_video_chats=can_manage_video_chats,
-                )
-                
-                if chat_obj:
-                    logger.info(
-                        f"Бот добавлен/обновлен в чат: {chat_title} (ID: {chat_id}, "
-                        f"Тип: {chat_type}, Статус: {new_status})"
+            # Если это канал, сохраняем в таблицу Channel
+            if chat_type == "channel":
+                # Сохраняем или обновляем канал в БД
+                # Сохраняем только если бот добавлен как member или administrator
+                if new_status in ["member", "administrator"]:
+                    channel_obj = await ChannelQueries.add_or_update_channel(
+                        session=session,
+                        channel_id=chat_id,
+                        channel_name=chat_title,
+                        bot_status=new_status,
+                        can_post_messages=can_post_messages,
+                        can_edit_messages=can_edit_messages,
+                        can_delete_messages=can_delete_messages,
+                        can_restrict_members=can_restrict_members,
+                        can_promote_members=can_promote_members,
+                        can_change_info=can_change_info,
+                        can_invite_users=can_invite_users,
+                        can_pin_messages=can_pin_messages,
+                        can_manage_chat=can_manage_chat,
+                        can_manage_video_chats=can_manage_video_chats,
                     )
-                else:
-                    logger.error(f"Не удалось сохранить чат {chat_id} в БД")
+                    
+                    if channel_obj:
+                        logger.info(
+                            f"Бот добавлен/обновлен в канал: {chat_title} (ID: {chat_id}, "
+                            f"Статус: {new_status})"
+                        )
+                    else:
+                        logger.error(f"Не удалось сохранить канал {chat_id} в БД")
+                
+                # Если бот удален из канала, обновляем статус
+                elif new_status in ["left", "kicked"]:
+                    await ChannelQueries.update_channel_status(session, chat_id, new_status)
+                    logger.info(
+                        f"Бот удален из канала: {chat_title} (ID: {chat_id}, Статус: {new_status})"
+                    )
+                
+                # Если статус изменился (например, с member на administrator)
+                elif old_status and old_status != new_status:
+                    await ChannelQueries.add_or_update_channel(
+                        session=session,
+                        channel_id=chat_id,
+                        channel_name=chat_title,
+                        bot_status=new_status,
+                        can_post_messages=can_post_messages,
+                        can_edit_messages=can_edit_messages,
+                        can_delete_messages=can_delete_messages,
+                        can_restrict_members=can_restrict_members,
+                        can_promote_members=can_promote_members,
+                        can_change_info=can_change_info,
+                        can_invite_users=can_invite_users,
+                        can_pin_messages=can_pin_messages,
+                        can_manage_chat=can_manage_chat,
+                        can_manage_video_chats=can_manage_video_chats,
+                    )
+                    logger.info(
+                        f"Статус бота изменен в канале {chat_title} (ID: {chat_id}): "
+                        f"{old_status} → {new_status}"
+                    )
             
-            # Если бот удален из чата, обновляем статус
-            elif new_status in ["left", "kicked"]:
-                await ChatQueries.update_chat_status(session, chat_id, new_status)
-                logger.info(
-                    f"Бот удален из чата: {chat_title} (ID: {chat_id}, Статус: {new_status})"
-                )
-            
-            # Если статус изменился (например, с member на administrator)
-            elif old_status and old_status != new_status:
-                await ChatQueries.add_or_update_chat(
-                    session=session,
-                    chat_id=chat_id,
-                    chat_type=chat_type,
-                    chat_title=chat_title,
-                    bot_status=new_status,
-                    can_post_messages=can_post_messages,
-                    can_edit_messages=can_edit_messages,
-                    can_delete_messages=can_delete_messages,
-                    can_restrict_members=can_restrict_members,
-                    can_promote_members=can_promote_members,
-                    can_change_info=can_change_info,
-                    can_invite_users=can_invite_users,
-                    can_pin_messages=can_pin_messages,
-                    can_manage_chat=can_manage_chat,
-                    can_manage_video_chats=can_manage_video_chats,
-                )
-                logger.info(
-                    f"Статус бота изменен в чате {chat_title} (ID: {chat_id}): "
-                    f"{old_status} → {new_status}"
-                )
+            else:
+                # Для групп и супергрупп сохраняем в таблицу Chat
+                # Сохраняем только если бот добавлен как member или administrator
+                if new_status in ["member", "administrator"]:
+                    chat_obj = await ChatQueries.add_or_update_chat(
+                        session=session,
+                        chat_id=chat_id,
+                        chat_type=chat_type,
+                        chat_title=chat_title,
+                        bot_status=new_status,
+                        can_post_messages=can_post_messages,
+                        can_edit_messages=can_edit_messages,
+                        can_delete_messages=can_delete_messages,
+                        can_restrict_members=can_restrict_members,
+                        can_promote_members=can_promote_members,
+                        can_change_info=can_change_info,
+                        can_invite_users=can_invite_users,
+                        can_pin_messages=can_pin_messages,
+                        can_manage_chat=can_manage_chat,
+                        can_manage_video_chats=can_manage_video_chats,
+                    )
+                    
+                    if chat_obj:
+                        logger.info(
+                            f"Бот добавлен/обновлен в чат: {chat_title} (ID: {chat_id}, "
+                            f"Тип: {chat_type}, Статус: {new_status})"
+                        )
+                    else:
+                        logger.error(f"Не удалось сохранить чат {chat_id} в БД")
+                
+                # Если бот удален из чата, обновляем статус
+                elif new_status in ["left", "kicked"]:
+                    await ChatQueries.update_chat_status(session, chat_id, new_status)
+                    logger.info(
+                        f"Бот удален из чата: {chat_title} (ID: {chat_id}, Статус: {new_status})"
+                    )
+                
+                # Если статус изменился (например, с member на administrator)
+                elif old_status and old_status != new_status:
+                    await ChatQueries.add_or_update_chat(
+                        session=session,
+                        chat_id=chat_id,
+                        chat_type=chat_type,
+                        chat_title=chat_title,
+                        bot_status=new_status,
+                        can_post_messages=can_post_messages,
+                        can_edit_messages=can_edit_messages,
+                        can_delete_messages=can_delete_messages,
+                        can_restrict_members=can_restrict_members,
+                        can_promote_members=can_promote_members,
+                        can_change_info=can_change_info,
+                        can_invite_users=can_invite_users,
+                        can_pin_messages=can_pin_messages,
+                        can_manage_chat=can_manage_chat,
+                        can_manage_video_chats=can_manage_video_chats,
+                    )
+                    logger.info(
+                        f"Статус бота изменен в чате {chat_title} (ID: {chat_id}): "
+                        f"{old_status} → {new_status}"
+                    )
     
     except Exception as e:
         logger.error(f"Ошибка при обработке my_chat_member: {e}")

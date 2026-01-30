@@ -1075,74 +1075,134 @@ async def process_channel_id(message: Message, state: FSMContext, bot: Bot):
 
 @router.callback_query(F.data == "admin_list_channels")
 async def callback_list_channels(callback: CallbackQuery):
-    """Список каналов"""
+    """Список каналов (оптимизировано с пагинацией)"""
     async with AsyncSessionLocal() as session:
         from db.queries.channel_queries import ChannelQueries
-        channels = await ChannelQueries.get_all_active_channels(session)
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
-        if not channels:
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        total_count = await ChannelQueries.count_channels(session, active_only=True)
+        
+        if total_count == 0:
             await callback.message.edit_text(
-                "📋 <b>СПИСОК КАНАЛОВ</b>\n\n"
-                "Каналы не добавлены.\n\n"
-                "Используйте кнопку '➕ Добавить канал' для добавления.",
-                reply_markup=AdminKeyboards.log_channel_management(),
+                "📢 <b>УПРАВЛЕНИЕ КАНАЛАМИ</b>\n\n"
+                "📋 Каналов не найдено.\n\n"
+                "Бот автоматически добавит каналы в базу данных, когда его добавят в канал как администратора.",
                 parse_mode="HTML"
             )
-        else:
-            text = "📋 <b>СПИСОК КАНАЛОВ</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            for i, channel in enumerate(channels, 1):
-                channel_name = channel.channel_name if channel.channel_name else f"Канал {channel.channel_id}"
-                text += f"{i}. 📢 <b>{channel_name}</b>\n"
-                text += f"   🆔 ID: <code>{channel.channel_id}</code>\n"
-                text += f"   📅 Добавлен: {channel.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-            
+            await callback.answer()
+            return
+        
+        page = 1
+        per_page = 10
+        channels = await ChannelQueries.get_all_channels(session, active_only=True, page=page, per_page=per_page)
+        
+        text = f"📢 <b>УПРАВЛЕНИЕ КАНАЛАМИ</b>\n\n📊 Выберите канал из списка:\n\n"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.channel_list(channels, page=page, per_page=per_page, total_count=total_count),
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_channels_page_"))
+async def callback_channels_page(callback: CallbackQuery):
+    """Навигация по страницам каналов"""
+    page = int(callback.data.replace("admin_channels_page_", ""))
+    per_page = 10
+    
+    async with AsyncSessionLocal() as session:
+        from db.queries.channel_queries import ChannelQueries
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        total_count = await ChannelQueries.count_channels(session, active_only=True)
+        
+        if total_count == 0:
             await callback.message.edit_text(
-                text,
-                reply_markup=AdminKeyboards.channel_list(channels),
+                "📢 <b>УПРАВЛЕНИЕ КАНАЛАМИ</b>\n\n"
+                "📋 Каналов не найдено.",
                 parse_mode="HTML"
             )
+            await callback.answer()
+            return
+        
+        channels = await ChannelQueries.get_all_channels(session, active_only=True, page=page, per_page=per_page)
+        
+        text = f"📢 <b>УПРАВЛЕНИЕ КАНАЛАМИ</b>\n\n📊 Выберите канал из списка:\n\n"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.channel_list(channels, page=page, per_page=per_page, total_count=total_count),
+            parse_mode="HTML"
+        )
     
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_view_channel_"))
 async def callback_view_channel(callback: CallbackQuery):
-    """Просмотр канала"""
+    """Просмотр информации о канале"""
     channel_db_id = int(callback.data.split("_")[-1])
     
     async with AsyncSessionLocal() as session:
         from db.queries.channel_queries import ChannelQueries
-        from sqlalchemy import select
-        from db.models import Channel
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
-        result = await session.execute(
-            select(Channel).where(Channel.id == channel_db_id)
-        )
-        channel = result.scalar_one_or_none()
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        channel = await ChannelQueries.get_channel_by_db_id(session, channel_db_id)
         
         if not channel:
             await callback.answer("❌ Канал не найден", show_alert=True)
             return
         
-        channel_name = channel.channel_name if channel.channel_name else f"Канал {channel.channel_id}"
+        # Формируем информацию о канале
+        status_emoji = "👑" if channel.bot_status == "administrator" else "👤"
+        status_text = "Администратор" if channel.bot_status == "administrator" else "Участник" if channel.bot_status == "member" else channel.bot_status or "Неизвестно"
+        
+        channel_name = channel.channel_name or f"Канал {channel.channel_id}"
         
         text = f"""
 📢 <b>ИНФОРМАЦИЯ О КАНАЛЕ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-<b>Название:</b> {channel_name}
-<b>ID канала:</b> <code>{channel.channel_id}</code>
-<b>Статус:</b> {'✅ Активен' if channel.is_active else '❌ Неактивен'}
-<b>Добавлен:</b> {channel.created_at.strftime('%d.%m.%Y %H:%M')}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Выберите действие:
+📝 <b>Название:</b> {channel_name}
+🆔 <b>Channel ID:</b> <code>{channel.channel_id}</code>
+{status_emoji} <b>Статус бота:</b> {status_text}
+📊 <b>Активен:</b> {'✅ Да' if channel.is_active else '❌ Нет'}
 """
+        
+        # Добавляем информацию о правах, если бот администратор
+        if channel.bot_status == "administrator":
+            text += "\n<b>Права бота:</b>\n"
+            if channel.can_post_messages:
+                text += "✅ Может отправлять сообщения\n"
+            if channel.can_edit_messages:
+                text += "✅ Может редактировать сообщения\n"
+            if channel.can_delete_messages:
+                text += "✅ Может удалять сообщения\n"
+            if channel.can_manage_chat:
+                text += "✅ Может управлять каналом\n"
+            if channel.can_pin_messages:
+                text += "✅ Может закреплять сообщения\n"
+        
+        text += f"\n📅 <b>Добавлен:</b> {channel.created_at.strftime('%d.%m.%Y %H:%M') if channel.created_at else 'Неизвестно'}"
         
         await callback.message.edit_text(
             text,
-            reply_markup=AdminKeyboards.channel_actions(channel.channel_id, channel.id),
+            reply_markup=AdminKeyboards.channel_actions(channel.channel_id, channel_db_id),
             parse_mode="HTML"
         )
     

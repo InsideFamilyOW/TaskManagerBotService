@@ -158,19 +158,36 @@ class AdminKeyboards:
         return builder.as_markup()
     
     @staticmethod
-    def channel_list(channels: List) -> InlineKeyboardMarkup:
-        """Список каналов с возможностью удаления"""
+    def channel_list(channels: List, page: int = 1, per_page: int = 10, total_count: int = None) -> InlineKeyboardMarkup:
+        """Список каналов с пагинацией"""
         builder = InlineKeyboardBuilder()
         
         if not channels:
             builder.button(text="❌ Каналы не добавлены", callback_data="noop")
         else:
             for channel in channels:
+                status_emoji = "👑" if channel.bot_status == "administrator" else "👤"
                 channel_name = channel.channel_name if channel.channel_name else f"Канал {channel.channel_id}"
-                text = f"📢 {channel_name}"
+                text = f"{status_emoji} {channel_name} ({channel.channel_id})"
                 builder.button(text=text, callback_data=f"admin_view_channel_{channel.id}")
         
-        builder.adjust(1)
+        # Пагинация
+        if channels and total_count is not None:
+            total_pages = (total_count + per_page - 1) // per_page
+            nav_buttons = []
+            
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_channels_page_{page-1}"))
+            nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_channels_page_{page+1}"))
+            
+            builder.adjust(1)
+            if nav_buttons:
+                builder.row(*nav_buttons)
+        else:
+            builder.adjust(1)
+        
         builder.button(text="◀️ Назад", callback_data="admin_channels_menu")
         
         return builder.as_markup()
@@ -179,6 +196,7 @@ class AdminKeyboards:
     def channel_actions(channel_id: int, db_channel_id: int) -> InlineKeyboardMarkup:
         """Действия с каналом"""
         builder = InlineKeyboardBuilder()
+        builder.button(text="✉️ Написать сообщение в этот канал", callback_data=f"admin_send_message_channel_{db_channel_id}")
         builder.button(text="🗑 Удалить канал", callback_data=f"admin_delete_channel_{db_channel_id}")
         builder.button(text="◀️ Назад к списку", callback_data="admin_list_channels")
         builder.adjust(1)

@@ -29,3 +29,6 @@ class AdminStates(StatesGroup):
     
     waiting_chat_selection = State()
     waiting_chat_message = State()
+    
+    waiting_channel_selection = State()
+    waiting_channel_message = State()

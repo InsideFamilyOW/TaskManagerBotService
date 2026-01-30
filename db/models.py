@@ -284,7 +284,7 @@ class ActionLog(Base):
     __tablename__ = "action_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete='SET NULL'), nullable=True, index=True)
     action_type = Column(String(50), nullable=False, index=True)
     entity_type = Column(String(30), nullable=False)
     entity_id = Column(Integer, nullable=True, index=True)
@@ -388,13 +388,30 @@ class Channel(Base):
     channel_name = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     
+    # Статус бота в канале (для автоматического отслеживания)
+    bot_status = Column(String(20), nullable=True, index=True)  # member, administrator, left, kicked
+    
+    # Права бота (если статус administrator)
+    can_post_messages = Column(Boolean, default=False, nullable=True)
+    can_edit_messages = Column(Boolean, default=False, nullable=True)
+    can_delete_messages = Column(Boolean, default=False, nullable=True)
+    can_restrict_members = Column(Boolean, default=False, nullable=True)
+    can_promote_members = Column(Boolean, default=False, nullable=True)
+    can_change_info = Column(Boolean, default=False, nullable=True)
+    can_invite_users = Column(Boolean, default=False, nullable=True)
+    can_pin_messages = Column(Boolean, default=False, nullable=True)
+    can_manage_chat = Column(Boolean, default=False, nullable=True)
+    can_manage_video_chats = Column(Boolean, default=False, nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # Может быть NULL для автоматически добавленных
     
     creator = relationship("User")
     
     __table_args__ = (
         Index("idx_channels_active", "is_active", "channel_id"),
+        Index("idx_channels_status", "bot_status", "channel_id"),
     )
 
 
