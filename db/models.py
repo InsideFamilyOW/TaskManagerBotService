@@ -1,4 +1,3 @@
-# database/models_optimized.py
 from sqlalchemy import (
     Column, Integer, String, DateTime, Text, Boolean, ForeignKey,
     Enum, DECIMAL, Index, UniqueConstraint, CheckConstraint, SmallInteger,
@@ -13,7 +12,6 @@ import enum
 Base = declarative_base()
 
 
-# === ОПТИМИЗИРОВАННЫЕ ENUMS ===
 class UserRole(enum.Enum):
     ADMIN = "admin"
     BUYER = "buyer"
@@ -29,7 +27,7 @@ class TaskStatus(enum.Enum):
     CANCELLED = "cancelled"
 
 
-class TaskPriority(enum.IntEnum):  # Изменено на IntEnum для производительности
+class TaskPriority(enum.IntEnum):
     LOW = 1
     MEDIUM = 2
     HIGH = 3
@@ -64,7 +62,6 @@ class MessageType(enum.Enum):
     FILE = "file"
 
 
-# === ДОПОЛНИТЕЛЬНЫЕ ENUMS ===
 class NotificationChannel(enum.Enum):
     TELEGRAM = "telegram"
     EMAIL = "email"
@@ -72,67 +69,58 @@ class NotificationChannel(enum.Enum):
 
 
 class ExecutorLoad(enum.IntEnum):
-    FREE = 0  # 0 задач
-    LIGHT = 1  # 1-2 задачи
-    MEDIUM = 2  # 3-4 задачи
-    HEAVY = 3  # 5+ задач
+    FREE = 0
+    LIGHT = 1
+    MEDIUM = 2
+    HEAVY = 3
 
 
-# === МНОГИЕ-КО-МНОГИМ ТАБЛИЦА (добавлена) ===
 executor_skills = Table(
     'executor_skills',
     Base.metadata,
     Column('executor_id', Integer, ForeignKey('users.id'), primary_key=True),
     Column('skill_id', Integer, ForeignKey('skills.id'), primary_key=True),
-    Column('level', SmallInteger, default=1),  # 1-10 уровень навыка
+    Column('level', SmallInteger, default=1),
     Column('created_at', DateTime(timezone=True), server_default=func.now())
 )
 
-# Таблица связи исполнителей и баеров
 executor_buyer_assignments = Table(
     'executor_buyer_assignments',
     Base.metadata,
     Column('executor_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
     Column('buyer_id', Integer, ForeignKey('users.id', ondelete='CASCADE'), primary_key=True),
     Column('created_at', DateTime(timezone=True), server_default=func.now()),
-    Column('created_by_id', Integer, ForeignKey('users.id'), nullable=True),  # Кто создал назначение (админ)
+    Column('created_by_id', Integer, ForeignKey('users.id'), nullable=True),
     UniqueConstraint('executor_id', 'buyer_id', name='uq_executor_buyer')
 )
 
 
-# === ОПТИМИЗИРОВАННЫЕ МОДЕЛИ ===
 class User(Base):
     __tablename__ = "users"
 
-    # Основные поля оптимизированы
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)  # BigInteger вместо String
-    username = Column(String(32), nullable=True)  # Ограничение по длине
+    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
+    username = Column(String(32), nullable=True)
     first_name = Column(String(64), nullable=True)
     last_name = Column(String(64), nullable=True)
-    role = Column(Enum(UserRole, name='user_role'), nullable=True, index=True)  # Nullable для незарегистрированных
+    role = Column(Enum(UserRole, name='user_role'), nullable=True, index=True)
 
-    # Для исполнителей (оптимизировано)
     direction = Column(Enum(DirectionType, name='direction_type'), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
-    # Флаг, принимает ли исполнитель сейчас новые задачи (отключается кнопкой в профиле)
     is_available = Column(Boolean, default=True, nullable=False, index=True)
-    current_load = Column(SmallInteger, default=0)  # Текущая загрузка
+    current_load = Column(SmallInteger, default=0)
     load_level = Column(Enum(ExecutorLoad, name='executor_load'),
                         default=ExecutorLoad.FREE, index=True)
 
-    # Статистика (добавлено)
     completed_tasks = Column(Integer, default=0)
-    avg_rating = Column(DECIMAL(3, 2), default=0.00)  # Средняя оценка
-    response_time = Column(Integer, default=0)  # Среднее время отклика в минутах
+    avg_rating = Column(DECIMAL(3, 2), default=0.00)
+    response_time = Column(Integer, default=0)
 
-    # Метаданные
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_activity = Column(DateTime(timezone=True), default=func.now(), index=True)
-    deleted_at = Column(DateTime(timezone=True), nullable=True)  # Soft delete
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Отношения
     created_tasks = relationship("Task", foreign_keys="Task.created_by_id",
                                  back_populates="creator", lazy="dynamic")
     assigned_tasks = relationship("Task", foreign_keys="Task.executor_id",
@@ -142,7 +130,6 @@ class User(Base):
     skills = relationship("Skill", secondary=executor_skills, back_populates="executors")
     notifications = relationship("NotificationQueue", back_populates="user", lazy="dynamic")
     
-    # Связи исполнителей и баеров
     assigned_buyers = relationship(
         "User",
         secondary=executor_buyer_assignments,
@@ -176,39 +163,32 @@ class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True, index=True)
-    task_number = Column(String(20), unique=True, index=True, nullable=False)  # Сократил длину
+    task_number = Column(String(20), unique=True, index=True, nullable=False)
 
-    # Основные поля оптимизированы
-    title = Column(String(200), nullable=False)  # Сократил длину
+    title = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     direction = Column(Enum(DirectionType), nullable=False, index=True)
-    priority = Column(SmallInteger, default=2, index=True)  # Используем IntEnum
+    priority = Column(SmallInteger, default=2, index=True)
     status = Column(Enum(TaskStatus), default=TaskStatus.PENDING, index=True)
 
-    # Связи
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     executor_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
 
-    # Сроки и время (оптимизировано)
     deadline = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Время выполнения (добавлено)
-    estimated_hours = Column(DECIMAL(4, 1), nullable=True)  # Оценка времени
-    actual_hours = Column(DECIMAL(4, 1), nullable=True)  # Фактическое время
+    estimated_hours = Column(DECIMAL(4, 1), nullable=True)
+    actual_hours = Column(DECIMAL(4, 1), nullable=True)
 
-    # Исполнение
     completion_comment = Column(Text, nullable=True)
-    rating = Column(SmallInteger, nullable=True)  # 1-5
+    rating = Column(SmallInteger, nullable=True)
 
-    # Метаданные (добавлено)
-    tags = Column(JSON, nullable=True)  # Теги для поиска
-    requirements = Column(JSON, nullable=True)  # JSON с требованиями
+    tags = Column(JSON, nullable=True)
+    requirements = Column(JSON, nullable=True)
 
-    # Отношения
     creator = relationship("User", foreign_keys=[created_by_id], back_populates="created_tasks")
     executor = relationship("User", foreign_keys=[executor_id], back_populates="assigned_tasks")
     files = relationship("TaskFile", back_populates="task", lazy="dynamic")
@@ -217,14 +197,12 @@ class Task(Base):
     corrections = relationship("TaskCorrection", back_populates="task", lazy="dynamic")
 
     __table_args__ = (
-        # Оптимизированные составные индексы для частых запросов
         Index("idx_tasks_active", "status", "priority", "deadline"),
         Index("idx_tasks_executor_active", "executor_id", "status"),
         Index("idx_tasks_creator_date", "created_by_id", "created_at"),
-        # Новые индексы для оптимизации пагинации
-        Index("idx_tasks_creator_status_date", "created_by_id", "status", "created_at"),  # Для фильтрации + сортировки
-        Index("idx_tasks_executor_status_date", "executor_id", "status", "created_at"),  # Для фильтрации + сортировки
-        Index("idx_tasks_status_creator_date", "status", "created_by_id", "created_at"),  # Для PENDING задач от баеров
+        Index("idx_tasks_creator_status_date", "created_by_id", "status", "created_at"),
+        Index("idx_tasks_executor_status_date", "executor_id", "status", "created_at"),
+        Index("idx_tasks_status_creator_date", "status", "created_by_id", "created_at"),
         CheckConstraint("rating >= 1 AND rating <= 5", name="check_rating_range"),
         CheckConstraint("priority >= 1 AND priority <= 4", name="check_priority_range"),
     )
@@ -237,18 +215,16 @@ class TaskFile(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     file_type = Column(Enum(FileType), nullable=False, index=True)
     file_name = Column(String(255), nullable=False)
-    file_path = Column(String(500), nullable=True)  # Устаревшее поле, оставлено для совместимости
+    file_path = Column(String(500), nullable=True)
     file_size = Column(Integer, nullable=False, default=0)
     mime_type = Column(String(100), nullable=True)
     uploaded_by_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    is_deleted = Column(Boolean, default=False, index=True)  # Soft delete
+    is_deleted = Column(Boolean, default=False, index=True)
     
-    # Поля для хранения файлов в БД (base64 формат)
-    photo_base64 = Column(Text, nullable=True)  # Устаревшее, заменено на file_data
-    file_data = Column(Text, nullable=True)  # Все файлы хранятся здесь в base64 формате
+    photo_base64 = Column(Text, nullable=True)
+    file_data = Column(Text, nullable=True)
 
-    # Отношения
     task = relationship("Task", back_populates="files")
     uploader = relationship("User")
 
@@ -266,10 +242,8 @@ class Message(Base):
     is_read = Column(Boolean, default=False, index=True)
     read_at = Column(DateTime(timezone=True), nullable=True)
 
-    # Для файлов в сообщениях
     file_id = Column(Integer, ForeignKey("task_files.id"), nullable=True)
 
-    # Отношения
     task = relationship("Task", back_populates="messages")
     sender = relationship("User", back_populates="messages")
     file = relationship("TaskFile")
@@ -296,10 +270,10 @@ class TaskLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    action = Column(String(50), nullable=False, index=True)  # Сократил длину
+    action = Column(String(50), nullable=False, index=True)
     old_status = Column(Enum(TaskStatus), nullable=True)
     new_status = Column(Enum(TaskStatus), nullable=True)
-    details = Column(JSON, nullable=True)  # Изменил на JSON для гибкости
+    details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     task = relationship("Task", back_populates="logs")
@@ -312,12 +286,11 @@ class ActionLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     action_type = Column(String(50), nullable=False, index=True)
-    entity_type = Column(String(30), nullable=False)  # Сократил длину
+    entity_type = Column(String(30), nullable=False)
     entity_id = Column(Integer, nullable=True, index=True)
-    details = Column(JSON, nullable=True)  # JSON вместо Text
+    details = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
-    # Индекс для быстрого поиска по времени
     __table_args__ = (
         Index('idx_action_logs_time', 'created_at'),
     )
@@ -332,7 +305,7 @@ class TaskRejection(Base):
     task_id = Column(Integer, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
     executor_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     reason = Column(Enum(RejectionReason), nullable=False)
-    custom_reason = Column(String(500), nullable=True)  # Ограничил длину
+    custom_reason = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     task = relationship("Task")
@@ -347,7 +320,7 @@ class NotificationQueue(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     notification_type = Column(String(50), nullable=False, index=True)
     channel = Column(Enum(NotificationChannel), default=NotificationChannel.TELEGRAM)
-    content = Column(JSON, nullable=False)  # JSON с данными уведомления
+    content = Column(JSON, nullable=False)
     priority = Column(SmallInteger, default=1, index=True)
     attempts = Column(SmallInteger, default=0)
     max_attempts = Column(SmallInteger, default=3)
@@ -366,18 +339,15 @@ class UserSettings(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
 
-    # Настройки уведомлений
     notify_new_task = Column(Boolean, default=True)
     notify_status_change = Column(Boolean, default=True)
     notify_messages = Column(Boolean, default=True)
     notify_deadline = Column(Boolean, default=True)
 
-    # Рабочие часы
-    work_start_time = Column(String(5), default="09:00")  # HH:MM
+    work_start_time = Column(String(5), default="09:00")
     work_end_time = Column(String(5), default="18:00")
     timezone = Column(String(50), default="UTC")
 
-    # Язык и интерфейс
     language = Column(String(10), default="ru")
     theme = Column(String(20), default="light")
 
@@ -394,19 +364,16 @@ class TaskStatistics(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
 
-    # Статистика за всё время
     total_created = Column(Integer, default=0)
     total_completed = Column(Integer, default=0)
     total_in_time = Column(Integer, default=0)
-    avg_completion_time = Column(Integer, default=0)  # в минутах
+    avg_completion_time = Column(Integer, default=0)
     avg_rating = Column(DECIMAL(3, 2), default=0.00)
 
-    # Статистика за месяц
     monthly_created = Column(Integer, default=0)
     monthly_completed = Column(Integer, default=0)
     monthly_avg_time = Column(Integer, default=0)
 
-    # Последнее обновление
     last_updated = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", backref="statistics")
@@ -417,17 +384,45 @@ class Channel(Base):
     __tablename__ = "channels"
 
     id = Column(Integer, primary_key=True, index=True)
-    channel_id = Column(BigInteger, unique=True, nullable=False, index=True)  # Telegram ID канала
-    channel_name = Column(String(255), nullable=True)  # Название канала (опционально)
+    channel_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    channel_name = Column(String(255), nullable=True)
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     
-    # Метаданные
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
-    # Отношения
     creator = relationship("User")
     
     __table_args__ = (
         Index("idx_channels_active", "is_active", "channel_id"),
+    )
+
+
+class Chat(Base):
+    """Таблица для хранения чатов, в которые добавлен бот"""
+    __tablename__ = "chats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    chat_id = Column(BigInteger, unique=True, nullable=False, index=True)
+    chat_type = Column(String(20), nullable=False)
+    chat_title = Column(String(255), nullable=True)
+    bot_status = Column(String(20), nullable=False, index=True)
+    
+    can_post_messages = Column(Boolean, default=False)
+    can_edit_messages = Column(Boolean, default=False)
+    can_delete_messages = Column(Boolean, default=False)
+    can_restrict_members = Column(Boolean, default=False)
+    can_promote_members = Column(Boolean, default=False)
+    can_change_info = Column(Boolean, default=False)
+    can_invite_users = Column(Boolean, default=False)
+    can_pin_messages = Column(Boolean, default=False)
+    can_manage_chat = Column(Boolean, default=False)
+    can_manage_video_chats = Column(Boolean, default=False)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index("idx_chats_status", "bot_status", "chat_id"),
+        Index("idx_chats_type", "chat_type", "bot_status"),
     )

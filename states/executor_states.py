@@ -5,28 +5,22 @@ from aiogram.fsm.state import State, StatesGroup
 class ExecutorStates(StatesGroup):
     """Состояния для работы исполнителя"""
     
-    # Управление задачами
-    waiting_task_action = State()  # Выбор действия с задачей
-    waiting_take_confirm = State()  # Подтверждение взятия в работу
-    waiting_reject_reason = State()  # Выбор причины отказа
-    waiting_reject_custom = State()  # Ввод своей причины отказа
+    waiting_task_action = State()
+    waiting_take_confirm = State()
+    waiting_reject_reason = State()
+    waiting_reject_custom = State()
     
-    # Выполнение задачи
-    waiting_completion_comment = State()  # Комментарий к выполнению
-    waiting_completion_files = State()  # Файлы результата
-    waiting_completion_confirm = State()  # Подтверждение отправки
+    waiting_completion_comment = State()
+    waiting_completion_files = State()
+    waiting_completion_confirm = State()
     
-    # Коммуникация
-    waiting_message_to_buyer = State()  # Сообщение байеру
-    waiting_clarification = State()  # Запрос уточнения
-    waiting_message_file = State()  # Файл к сообщению
-    waiting_file_to_task = State()  # Добавление файла к задаче
+    waiting_message_to_buyer = State()
+    waiting_clarification = State()
+    waiting_message_file = State()
+    waiting_file_to_task = State()
     
-    # Управление правками
-    waiting_correction_complete = State()  # Завершение правок
-    waiting_correction_files = State()  # Файлы после правок
+    waiting_correction_complete = State()
+    waiting_correction_files = State()
     
-    # Просмотр задач
-    waiting_my_tasks_filter = State()  # Фильтр своих задач
-    waiting_task_detail = State()  # Детали задачи
-
+    waiting_my_tasks_filter = State()
+    waiting_task_detail = State()

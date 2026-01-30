@@ -1,4 +1,3 @@
-# ---------------- LOGGING ----------------
 import logging
 
 logging.basicConfig(
@@ -8,5 +7,3 @@ logging.basicConfig(
     encoding="utf-8"
 )
 logger = logging.getLogger(__name__)
-
-# -----------------------------------------

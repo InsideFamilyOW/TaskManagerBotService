@@ -1,7 +1,6 @@
 """Утилиты для работы с сообщениями Telegram"""
 from typing import Tuple, Optional
 
-# Максимальная длина сообщения в Telegram
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 
@@ -19,8 +18,7 @@ def truncate_message(text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -
     if len(text) <= max_length:
         return text, False
     
-    # Обрезаем текст и добавляем индикатор обрезки
-    truncated_text = text[:max_length - 20]  # Оставляем место для индикатора
+    truncated_text = text[:max_length - 20]
     truncated_text += "\n\n... (сообщение обрезано)"
     
     return truncated_text, True
@@ -42,22 +40,17 @@ def truncate_description_in_preview(
     Returns:
         Tuple[str, bool]: (финальный текст с обрезанным описанием, было ли обрезано)
     """
-    # Сначала пробуем с полным описанием
     full_text = base_text_template.format(description=description)
     
     if len(full_text) <= max_length:
         return full_text, False
     
-    # Вычисляем максимальную длину описания
-    # Вычитаем длину шаблона без описания и добавляем место для индикатора обрезки
     template_without_desc = base_text_template.format(description="")
-    max_desc_length = max_length - len(template_without_desc) - 30  # 30 символов для индикатора
+    max_desc_length = max_length - len(template_without_desc) - 30
     
     if max_desc_length <= 0:
-        # Если даже без описания текст слишком длинный, обрезаем весь текст
         return truncate_message(full_text, max_length)
     
-    # Обрезаем описание
     truncated_description = description[:max_desc_length]
     truncated_description += "\n\n... (описание обрезано)"
     
@@ -123,5 +116,5 @@ def get_max_description_length(
         int: Максимальная длина описания
     """
     template_without_desc = base_text_template.format(description="")
-    max_desc_length = max_length - len(template_without_desc) - 50  # Запас для безопасности
+    max_desc_length = max_length - len(template_without_desc) - 50
     return max(0, max_desc_length)

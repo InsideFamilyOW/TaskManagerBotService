@@ -10,7 +10,6 @@ DEPRECATED: Этот файл сохранен для обратной совм�
 Подробная документация: db/queries/README.md
 """
 
-# Импорты для обратной совместимости
 from db.queries.user_queries import UserQueries
 from db.queries.task_queries import TaskQueries
 from db.queries.message_queries import MessageQueries

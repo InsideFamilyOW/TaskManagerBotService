@@ -18,14 +18,12 @@ class ChannelQueries:
     ) -> Optional[Channel]:
         """Добавить новый канал"""
         try:
-            # Проверяем, существует ли уже такой канал
             result = await session.execute(
                 select(Channel).where(Channel.channel_id == channel_id)
             )
             existing_channel = result.scalar_one_or_none()
             
             if existing_channel:
-                # Если канал существует, но был деактивирован, активируем его
                 if not existing_channel.is_active:
                     existing_channel.is_active = True
                     await session.commit()
@@ -35,8 +33,7 @@ class ChannelQueries:
                 else:
                     logger.warning(f"Канал {channel_id} уже существует")
                     return None
-            
-            # Создаем новый канал
+
             channel = Channel(
                 channel_id=channel_id,
                 channel_name=channel_name,

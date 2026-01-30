@@ -32,7 +32,6 @@ from . import buyer_profile
 
 router = Router()
 
-# Подключаем роутер файлов
 router.include_router(buyer_files.router)
 router.include_router(buyer_profile.router)
 
@@ -48,8 +47,7 @@ async def buyer_create_task(message: Message, state: FSMContext):
         if not user or user.role != UserRole.BUYER:
             await message.answer("❌ У вас нет доступа к этой функции")
             return
-        
-        # Получаем назначенных И ДОСТУПНЫХ исполнителей для этого баера
+
         assigned_executors = await UserQueries.get_executors_for_buyer(session, user.id)
         # Отдельно получаем вообще всех закреплённых (даже если сейчас недоступны)
         all_assigned_executors = await UserQueries.get_all_assigned_executors_for_buyer(session, user.id)
@@ -104,8 +102,7 @@ async def buyer_create_task(message: Message, state: FSMContext):
                     parse_mode="HTML"
                 )
             return
-        
-        # Сохраняем данные исполнителей
+
         await state.update_data(executors_by_direction=executors_by_direction)
         
         text = """

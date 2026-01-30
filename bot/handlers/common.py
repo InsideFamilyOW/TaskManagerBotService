@@ -1,6 +1,6 @@
 """Общие обработчики для всех пользователей"""
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, ChatMemberUpdated
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +8,7 @@ from sqlalchemy.sql import func
 
 from db.engine import AsyncSessionLocal
 from db.queries import UserQueries, TaskQueries
+from db.queries.chat_queries import ChatQueries
 from db.models import UserRole, DirectionType, TaskStatus
 from bot.keyboards.admin_kb import AdminKeyboards
 from bot.keyboards.buyer_kb import BuyerKeyboards
@@ -479,3 +480,105 @@ async def statistics_menu(message: Message):
             )
         else:
             await message.answer("❌ У вас нет доступа к этой функции")
+
+
+@router.my_chat_member()
+async def handle_my_chat_member(event: ChatMemberUpdated):
+    """Обработка изменений статуса бота в чатах"""
+    try:
+        chat = event.chat
+        new_status = event.new_chat_member.status
+        old_status = event.old_chat_member.status if event.old_chat_member else None
+        
+        # Получаем информацию о чате
+        chat_id = chat.id
+        chat_type = chat.type
+        chat_title = chat.title or chat.username or f"Chat {chat_id}"
+        
+        # Получаем права бота, если он администратор
+        can_post_messages = False
+        can_edit_messages = False
+        can_delete_messages = False
+        can_restrict_members = False
+        can_promote_members = False
+        can_change_info = False
+        can_invite_users = False
+        can_pin_messages = False
+        can_manage_chat = False
+        can_manage_video_chats = False
+        
+        if new_status == "administrator" and hasattr(event.new_chat_member, "can_post_messages"):
+            can_post_messages = getattr(event.new_chat_member, "can_post_messages", False)
+            can_edit_messages = getattr(event.new_chat_member, "can_edit_messages", False)
+            can_delete_messages = getattr(event.new_chat_member, "can_delete_messages", False)
+            can_restrict_members = getattr(event.new_chat_member, "can_restrict_members", False)
+            can_promote_members = getattr(event.new_chat_member, "can_promote_members", False)
+            can_change_info = getattr(event.new_chat_member, "can_change_info", False)
+            can_invite_users = getattr(event.new_chat_member, "can_invite_users", False)
+            can_pin_messages = getattr(event.new_chat_member, "can_pin_messages", False)
+            can_manage_chat = getattr(event.new_chat_member, "can_manage_chat", False)
+            can_manage_video_chats = getattr(event.new_chat_member, "can_manage_video_chats", False)
+        
+        async with AsyncSessionLocal() as session:
+            # Сохраняем или обновляем чат в БД
+            # Сохраняем только если бот добавлен как member или administrator
+            if new_status in ["member", "administrator"]:
+                chat_obj = await ChatQueries.add_or_update_chat(
+                    session=session,
+                    chat_id=chat_id,
+                    chat_type=chat_type,
+                    chat_title=chat_title,
+                    bot_status=new_status,
+                    can_post_messages=can_post_messages,
+                    can_edit_messages=can_edit_messages,
+                    can_delete_messages=can_delete_messages,
+                    can_restrict_members=can_restrict_members,
+                    can_promote_members=can_promote_members,
+                    can_change_info=can_change_info,
+                    can_invite_users=can_invite_users,
+                    can_pin_messages=can_pin_messages,
+                    can_manage_chat=can_manage_chat,
+                    can_manage_video_chats=can_manage_video_chats,
+                )
+                
+                if chat_obj:
+                    logger.info(
+                        f"Бот добавлен/обновлен в чат: {chat_title} (ID: {chat_id}, "
+                        f"Тип: {chat_type}, Статус: {new_status})"
+                    )
+                else:
+                    logger.error(f"Не удалось сохранить чат {chat_id} в БД")
+            
+            # Если бот удален из чата, обновляем статус
+            elif new_status in ["left", "kicked"]:
+                await ChatQueries.update_chat_status(session, chat_id, new_status)
+                logger.info(
+                    f"Бот удален из чата: {chat_title} (ID: {chat_id}, Статус: {new_status})"
+                )
+            
+            # Если статус изменился (например, с member на administrator)
+            elif old_status and old_status != new_status:
+                await ChatQueries.add_or_update_chat(
+                    session=session,
+                    chat_id=chat_id,
+                    chat_type=chat_type,
+                    chat_title=chat_title,
+                    bot_status=new_status,
+                    can_post_messages=can_post_messages,
+                    can_edit_messages=can_edit_messages,
+                    can_delete_messages=can_delete_messages,
+                    can_restrict_members=can_restrict_members,
+                    can_promote_members=can_promote_members,
+                    can_change_info=can_change_info,
+                    can_invite_users=can_invite_users,
+                    can_pin_messages=can_pin_messages,
+                    can_manage_chat=can_manage_chat,
+                    can_manage_video_chats=can_manage_video_chats,
+                )
+                logger.info(
+                    f"Статус бота изменен в чате {chat_title} (ID: {chat_id}): "
+                    f"{old_status} → {new_status}"
+                )
+    
+    except Exception as e:
+        logger.error(f"Ошибка при обработке my_chat_member: {e}")

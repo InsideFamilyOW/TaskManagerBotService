@@ -18,7 +18,6 @@ router = Router()
 
 
 # ============ ПРОСМОТР И СКАЧИВАНИЕ ФАЙЛОВ (приоритетные обработчики) ============
-# Эти обработчики должны работать всегда, независимо от состояния
 
 @router.callback_query(F.data.startswith("buyer_view_files_"))
 async def callback_view_task_files(callback: CallbackQuery, state: FSMContext):
@@ -99,11 +98,9 @@ async def callback_download_file(callback: CallbackQuery, bot: Bot, state: FSMCo
             return
         
         try:
-            # Проверяем, есть ли сохраненный file_id для больших файлов
             telegram_file_id = FileQueries.get_telegram_file_id(file_record)
             
             if telegram_file_id:
-                # Отправляем файл используя сохраненный file_id
                 if file_record.mime_type and file_record.mime_type.startswith('image/'):
                     await bot.send_photo(callback.from_user.id, telegram_file_id, caption=file_record.file_name)
                 elif file_record.mime_type and file_record.mime_type.startswith('video/'):
@@ -112,12 +109,10 @@ async def callback_download_file(callback: CallbackQuery, bot: Bot, state: FSMCo
                     await bot.send_document(callback.from_user.id, telegram_file_id, caption=file_record.file_name)
                 await callback.answer("✅ Файл отправлен")
             elif file_record.file_data:
-                # Декодируем файл из base64
                 from aiogram.types import BufferedInputFile
                 file_bytes = FileHandler.decode_file_base64(file_record.file_data)
                 if file_bytes:
                     input_file = BufferedInputFile(file_bytes, filename=file_record.file_name)
-                    # Определяем тип файла по mime_type
                     if file_record.mime_type and file_record.mime_type.startswith('image/'):
                         await bot.send_photo(callback.from_user.id, input_file, caption=file_record.file_name)
                     elif file_record.mime_type and file_record.mime_type.startswith('video/'):
@@ -128,7 +123,6 @@ async def callback_download_file(callback: CallbackQuery, bot: Bot, state: FSMCo
                 else:
                     await callback.answer("❌ Ошибка декодирования файла", show_alert=True)
             elif file_record.photo_base64:
-                # Устаревший формат - фото в base64
                 from aiogram.types import BufferedInputFile
                 photo_bytes = PhotoHandler.decode_photo_base64(file_record.photo_base64)
                 if photo_bytes:
@@ -138,9 +132,7 @@ async def callback_download_file(callback: CallbackQuery, bot: Bot, state: FSMCo
                 else:
                     await callback.answer("❌ Ошибка декодирования фото", show_alert=True)
             elif file_record.file_path:
-                # Проверяем, это telegram_file_id или путь к файлу на диске
                 if file_record.file_path.startswith("telegram_file_id:"):
-                    # Это сохраненный file_id для большого файла
                     telegram_file_id = file_record.file_path.replace("telegram_file_id:", "")
                     if file_record.mime_type and file_record.mime_type.startswith('image/'):
                         await bot.send_photo(callback.from_user.id, telegram_file_id, caption=file_record.file_name)
@@ -150,7 +142,6 @@ async def callback_download_file(callback: CallbackQuery, bot: Bot, state: FSMCo
                         await bot.send_document(callback.from_user.id, telegram_file_id, caption=file_record.file_name)
                     await callback.answer("✅ Файл отправлен")
                 else:
-                    # Устаревший формат - файл на диске
                     import os
                     if os.path.exists(file_record.file_path):
                         with open(file_record.file_path, 'rb') as f:

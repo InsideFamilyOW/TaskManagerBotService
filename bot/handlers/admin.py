@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from db.engine import AsyncSessionLocal
 from db.queries import UserQueries, TaskQueries, LogQueries, FileQueries, MessageQueries
+from db.queries.chat_queries import ChatQueries
 from db.models import UserRole, DirectionType, TaskStatus
 from bot.keyboards.admin_kb import AdminKeyboards
 from bot.keyboards.common_kb import CommonKeyboards
@@ -18,8 +19,6 @@ from log import logger
 
 router = Router()
 
-
-# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 
 async def notify_user_role_assigned(bot: Bot, user_telegram_id: int, role: UserRole, direction: DirectionType = None):
     """Отправляет уведомление пользователю о назначении роли"""
@@ -83,8 +82,6 @@ async def notify_user_role_assigned(bot: Bot, user_telegram_id: int, role: UserR
         return False
 
 
-# ============ ГЛАВНОЕ МЕНЮ ============
-
 @router.message(F.text == "📝 Заявки")
 async def admin_applications(message: Message):
     """Просмотр заявок (пользователей без роли)"""
@@ -95,7 +92,6 @@ async def admin_applications(message: Message):
             await message.answer("❌ У вас нет доступа к этой функции")
             return
         
-        # Получаем всех пользователей без роли
         from sqlalchemy import select
         from db.models import User
         
@@ -139,7 +135,6 @@ async def callback_applications(callback: CallbackQuery):
             await callback.answer("❌ У вас нет доступа", show_alert=True)
             return
         
-        # Получаем всех пользователей без роли
         from sqlalchemy import select
         from db.models import User
         
@@ -186,7 +181,6 @@ async def callback_view_application(callback: CallbackQuery):
             await callback.answer("❌ Заявка не найдена", show_alert=True)
             return
         
-        # Если у пользователя уже есть роль
         if user.role is not None:
             await callback.answer("⚠️ Этой заявке уже назначена роль", show_alert=True)
             await callback_applications(callback)
@@ -232,7 +226,6 @@ async def callback_accept_application(callback: CallbackQuery, state: FSMContext
             await callback.answer("⚠️ Этой заявке уже назначена роль", show_alert=True)
             return
         
-        # Сохраняем ID пользователя и флаг что это заявка
         await state.update_data(
             edit_user_id=user_id,
             telegram_id=user.telegram_id,
@@ -277,16 +270,13 @@ async def callback_reject_application(callback: CallbackQuery):
             await callback.answer("❌ Заявка не найдена", show_alert=True)
             return
         
-        # Сохраняем информацию для уведомления
         user_telegram_id = user.telegram_id
         user_name = f"{user.first_name} {user.last_name or ''}"
         user_username = user.username
         
-        # Удаляем пользователя
         success = await UserQueries.delete_user(session, user_id)
         
         if success:
-            # Логируем
             await LogQueries.create_action_log(
                 session=session,
                 user_id=admin.id,
@@ -299,7 +289,6 @@ async def callback_reject_application(callback: CallbackQuery):
                 }
             )
             
-            # Уведомляем пользователя об отклонении
             try:
                 await callback.bot.send_message(
                     chat_id=user_telegram_id,
@@ -370,11 +359,9 @@ async def process_telegram_id(message: Message, state: FSMContext):
         telegram_id = int(message.text.strip())
         
         async with AsyncSessionLocal() as session:
-            # Проверяем, не существует ли уже пользователь
             existing_user = await UserQueries.get_user_by_telegram_id(session, telegram_id)
             
             if existing_user and existing_user.role is not None:
-                # Пользователь уже существует с ролью
                 role_names = {
                     UserRole.ADMIN: "Администратор",
                     UserRole.BUYER: "Байер",
@@ -391,14 +378,12 @@ async def process_telegram_id(message: Message, state: FSMContext):
                 await state.clear()
                 return
             
-            # Сохраняем информацию о существующем пользователе
             await state.update_data(
                 telegram_id=telegram_id,
                 existing_user=existing_user is not None,
                 user_name=f"{existing_user.first_name} {existing_user.last_name or ''}" if existing_user else None
             )
             
-            # Запрашиваем роль
             if existing_user:
                 await message.answer(
                     f"✅ <b>Пользователь найден в базе!</b>\n\n"
@@ -442,19 +427,15 @@ async def process_role_selection(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await state.update_data(role=selected_role)
     
-    # Получаем имя пользователя для отображения
     user_name = data.get('user_name', 'Неизвестно')
     
-    # Если это заявка или существующий пользователь
     if data.get('existing_user') or data.get('is_application'):
-        # Получаем информацию о пользователе для отображения
         if data.get('edit_user_id'):
             async with AsyncSessionLocal() as session:
                 user = await UserQueries.get_user_by_id(session, data.get('edit_user_id'))
                 if user:
                     user_name = f"{user.first_name} {user.last_name or ''}"
         
-        # Если исполнитель - нужно направление
         if selected_role == UserRole.EXECUTOR:
             await callback.message.edit_text(
                 f"✅ <b>Роль выбрана: Исполнитель</b>\n"
@@ -468,10 +449,8 @@ async def process_role_selection(callback: CallbackQuery, state: FSMContext):
             )
             await state.set_state(AdminStates.waiting_user_direction)
         else:
-            # Для админа и байера сразу назначаем роль
             await assign_role_to_existing_user(callback.message, state, callback.from_user.id)
     else:
-        # Новый пользователь - создаём с временным именем
         if selected_role == UserRole.EXECUTOR:
             await callback.message.edit_text(
                 "✅ <b>Роль выбрана: Исполнитель</b>\n"
@@ -484,7 +463,6 @@ async def process_role_selection(callback: CallbackQuery, state: FSMContext):
             )
             await state.set_state(AdminStates.waiting_user_direction)
         else:
-            # Для админа и байера создаём пользователя сразу
             await create_new_user_with_temp_name(callback.message, state, callback.from_user.id)
     
     await callback.answer()
@@ -508,9 +486,7 @@ async def process_direction_selection(callback: CallbackQuery, state: FSMContext
     data = await state.get_data()
     await state.update_data(direction=selected_direction)
     
-    # Проверяем, это редактирование существующего пользователя или добавление нового
     if data.get('edit_user_id'):
-        # Редактирование - обновляем роль и направление существующего пользователя
         user_id = data.get('edit_user_id')
         new_role = data.get('new_role')
         
@@ -523,20 +499,15 @@ async def process_direction_selection(callback: CallbackQuery, state: FSMContext
                 await state.clear()
                 return
             
-            # Если new_role не установлен в состоянии, используем роль исполнителя
-            # (так как выбор направления происходит только для исполнителей)
             if new_role is None:
                 new_role = UserRole.EXECUTOR
             
-            # Обновляем роль и направление
             old_role = user.role
             await UserQueries.update_user_role(session, user_id, new_role)
             await UserQueries.update_user_direction(session, user_id, selected_direction)
             
-            # Получаем обновленного пользователя
             await session.refresh(user)
             
-            # Логируем
             await LogQueries.create_action_log(
                 session=session,
                 user_id=admin.id,
@@ -550,7 +521,6 @@ async def process_direction_selection(callback: CallbackQuery, state: FSMContext
                 }
             )
             
-            # Отправляем уведомление пользователю
             try:
                 notification_sent = await notify_user_role_assigned(
                     bot=callback.bot,
@@ -569,7 +539,6 @@ async def process_direction_selection(callback: CallbackQuery, state: FSMContext
                 DirectionType.MARKETING: "📱 Маркетинг"
             }
             
-            # Определяем, это заявка или редактирование
             is_application = data.get('is_application', False)
             
             if is_application:
@@ -597,7 +566,6 @@ async def process_direction_selection(callback: CallbackQuery, state: FSMContext
             logger.info(f"Админ {admin.telegram_id} изменил роль и направление пользователя {user.telegram_id}")
     
     elif data.get('existing_user'):
-        # Добавление роли существующему пользователю без роли
         await assign_role_to_existing_user(callback.message, state, callback.from_user.id)
     else:
         # Новый пользователь-исполнитель - создаём с временным именем
@@ -627,7 +595,7 @@ async def create_new_user_with_temp_name(message, state: FSMContext, admin_teleg
                 direction=data.get('direction')
             )
             
-            # Логируем действие
+
             await LogQueries.create_action_log(
                 session=session,
                 user_id=admin.id,
@@ -642,7 +610,6 @@ async def create_new_user_with_temp_name(message, state: FSMContext, admin_teleg
                 }
             )
             
-            # Отправляем уведомление пользователю
             bot = message.bot
             notification_sent = await notify_user_role_assigned(
                 bot=bot,
@@ -1877,7 +1844,6 @@ async def callback_admin_download_file(callback: CallbackQuery, bot: Bot):
         
         try:
             # Проверяем, есть ли сохраненный file_id для больших файлов
-            from db.queries.file_queries import FileQueries
             telegram_file_id = FileQueries.get_telegram_file_id(file_record)
             
             if telegram_file_id:
@@ -2744,11 +2710,9 @@ async def callback_delete_confirmed(callback: CallbackQuery, state: FSMContext):
             "role": user.role.value if user.role else "None"
         }
         
-        # Удаляем пользователя
         success = await UserQueries.delete_user(session, user_id)
         
         if success:
-            # Логируем (пользователь уже удален, поэтому entity_id будет None)
             await LogQueries.create_action_log(
                 session=session,
                 user_id=admin.id,
@@ -3426,3 +3390,336 @@ async def callback_view_executor_buyers(callback: CallbackQuery):
             parse_mode="HTML"
         )
         await callback.answer()
+
+
+# ============ УПРАВЛЕНИЕ ЧАТАМИ ============
+
+@router.message(F.text == "💬 Чаты")
+async def admin_chats_menu(message: Message):
+    """Меню управления чатами"""
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await message.answer("❌ У вас нет доступа к этой функции")
+            return
+        
+        # Получаем список чатов
+        total_count = await ChatQueries.count_chats(session)
+        
+        if total_count == 0:
+            await message.answer(
+                "💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n"
+                "📋 Чатов не найдено.\n\n"
+                "Бот автоматически добавит чаты в базу данных, когда его добавят в группу или канал.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Загружаем первую страницу
+        page = 1
+        per_page = 10
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+        
+        text = f"💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n📊 Выберите чат из списка:\n\n"
+        
+        await message.answer(
+            text,
+            reply_markup=AdminKeyboards.chat_list(chats, page=page, per_page=per_page, total_count=total_count),
+            parse_mode="HTML"
+        )
+
+
+@router.callback_query(F.data == "admin_chats_list")
+async def callback_chats_list(callback: CallbackQuery):
+    """Список чатов (callback)"""
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        total_count = await ChatQueries.count_chats(session)
+        
+        if total_count == 0:
+            await callback.message.edit_text(
+                "💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n"
+                "📋 Чатов не найдено.\n\n"
+                "Бот автоматически добавит чаты в базу данных, когда его добавят в группу или канал.",
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
+        
+        page = 1
+        per_page = 10
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+        
+        text = f"💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n📊 Выберите чат из списка:\n\n"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_list(chats, page=page, per_page=per_page, total_count=total_count),
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_chats_page_"))
+async def callback_chats_page(callback: CallbackQuery):
+    """Навигация по страницам чатов"""
+    page = int(callback.data.replace("admin_chats_page_", ""))
+    per_page = 10
+    
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        total_count = await ChatQueries.count_chats(session)
+        
+        if total_count == 0:
+            await callback.message.edit_text(
+                "💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n"
+                "📋 Чатов не найдено.",
+                parse_mode="HTML"
+            )
+            await callback.answer()
+            return
+        
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+        
+        text = f"💬 <b>УПРАВЛЕНИЕ ЧАТАМИ</b>\n\n📊 Выберите чат из списка:\n\n"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_list(chats, page=page, per_page=per_page, total_count=total_count),
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_view_chat_"))
+async def callback_view_chat(callback: CallbackQuery):
+    """Просмотр информации о чате"""
+    chat_db_id = int(callback.data.split("_")[-1])
+    
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+        
+        if not chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+        
+        # Формируем информацию о чате
+        status_emoji = "👑" if chat.bot_status == "administrator" else "👤"
+        status_text = "Администратор" if chat.bot_status == "administrator" else "Участник"
+        
+        chat_type_names = {
+            "group": "Группа",
+            "supergroup": "Супергруппа",
+            "channel": "Канал"
+        }
+        chat_type_name = chat_type_names.get(chat.chat_type, chat.chat_type)
+        
+        text = f"""
+💬 <b>ИНФОРМАЦИЯ О ЧАТЕ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 <b>Название:</b> {chat.chat_title or 'Не указано'}
+🆔 <b>Chat ID:</b> <code>{chat.chat_id}</code>
+📋 <b>Тип:</b> {chat_type_name}
+{status_emoji} <b>Статус бота:</b> {status_text}
+"""
+        
+        text += f"\n📅 <b>Добавлен:</b> {chat.created_at.strftime('%d.%m.%Y %H:%M') if chat.created_at else 'Неизвестно'}"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_actions(chat_db_id),
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_send_message_chat_"))
+async def callback_send_message_chat(callback: CallbackQuery, state: FSMContext):
+    """Начало процесса отправки сообщения в чат"""
+    chat_db_id = int(callback.data.split("_")[-1])
+    
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+        
+        if not chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+        
+        # Сохраняем ID чата в состояние
+        await state.update_data(chat_db_id=chat_db_id, chat_telegram_id=chat.chat_id)
+        await state.set_state(AdminStates.waiting_chat_message)
+        
+        await callback.message.edit_text(
+            f"✉️ <b>ОТПРАВКА СООБЩЕНИЯ В ЧАТ</b>\n\n"
+            f"📝 Чат: <b>{chat.chat_title or f'Chat {chat.chat_id}'}</b>\n\n"
+            f"Напишите сообщение, которое хотите отправить в этот чат:\n\n"
+            f"<i>Вы можете отправить текст, фото, видео или любой другой медиа-файл.</i>",
+            parse_mode="HTML"
+        )
+    
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_chat_message)
+async def process_chat_message(message: Message, state: FSMContext, bot: Bot):
+    """Обработка сообщения для отправки в чат"""
+    data = await state.get_data()
+    chat_db_id = data.get("chat_db_id")
+    chat_telegram_id = data.get("chat_telegram_id")
+    
+    if not chat_telegram_id:
+        await message.answer("❌ Ошибка: не найден ID чата")
+        await state.clear()
+        return
+    
+    try:
+        # Отправляем сообщение в чат
+        if message.text:
+            # Текстовое сообщение
+            await bot.send_message(
+                chat_id=chat_telegram_id,
+                text=message.text,
+                parse_mode="HTML"
+            )
+        elif message.photo:
+            # Фото с подписью или без
+            caption = message.caption or ""
+            await bot.send_photo(
+                chat_id=chat_telegram_id,
+                photo=message.photo[-1].file_id,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        elif message.video:
+            # Видео с подписью или без
+            caption = message.caption or ""
+            await bot.send_video(
+                chat_id=chat_telegram_id,
+                video=message.video.file_id,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        elif message.document:
+            # Документ с подписью или без
+            caption = message.caption or ""
+            await bot.send_document(
+                chat_id=chat_telegram_id,
+                document=message.document.file_id,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        elif message.audio:
+            # Аудио с подписью или без
+            caption = message.caption or ""
+            await bot.send_audio(
+                chat_id=chat_telegram_id,
+                audio=message.audio.file_id,
+                caption=caption,
+                parse_mode="HTML"
+            )
+        elif message.voice:
+            # Голосовое сообщение
+            await bot.send_voice(
+                chat_id=chat_telegram_id,
+                voice=message.voice.file_id
+            )
+        else:
+            await message.answer("❌ Неподдерживаемый тип сообщения")
+            await state.clear()
+            return
+        
+        await message.answer(
+            f"✅ <b>Сообщение отправлено!</b>\n\n"
+            f"Сообщение успешно отправлено в чат.",
+            parse_mode="HTML"
+        )
+        
+        logger.info(f"Админ {message.from_user.id} отправил сообщение в чат {chat_telegram_id}")
+        
+    except Exception as e:
+        error_msg = str(e)
+        if "chat not found" in error_msg.lower() or "chat_id is empty" in error_msg.lower():
+            await message.answer(
+                "❌ <b>Ошибка отправки</b>\n\n"
+                "Бот не может отправить сообщение в этот чат.\n"
+                "Возможные причины:\n"
+                "• Бот удален из чата\n"
+                "• У бота нет прав на отправку сообщений\n"
+                "• Неверный ID чата",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                f"❌ <b>Ошибка отправки</b>\n\n"
+                f"Произошла ошибка: {error_msg}",
+                parse_mode="HTML"
+            )
+        logger.error(f"Ошибка при отправке сообщения в чат {chat_telegram_id}: {e}")
+    
+    finally:
+        await state.clear()
+
+
+@router.callback_query(F.data.startswith("admin_delete_chat_"))
+async def callback_delete_chat(callback: CallbackQuery):
+    """Удаление чата из БД"""
+    chat_db_id = int(callback.data.split("_")[-1])
+    
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+        
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+        
+        if not chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+        
+        # Удаляем чат из БД
+        success = await ChatQueries.delete_chat(session, chat.chat_id)
+        
+        if success:
+            await callback.message.edit_text(
+                f"✅ <b>Чат удален</b>\n\n"
+                f"Чат <b>{chat.chat_title or f'Chat {chat.chat_id}'}</b> успешно удален из базы данных.",
+                parse_mode="HTML"
+            )
+            logger.info(f"Админ {callback.from_user.id} удалил чат {chat.chat_id} из БД")
+        else:
+            await callback.message.edit_text(
+                f"❌ <b>Ошибка удаления</b>\n\n"
+                f"Не удалось удалить чат из базы данных.",
+                parse_mode="HTML"
+            )
+    
+    await callback.answer()

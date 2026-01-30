@@ -18,8 +18,9 @@ class AdminKeyboards:
         builder.button(text="📊 Статистика")
         builder.button(text="📋 Все задачи")
         builder.button(text="⚙️ Настройки каналов логов")
+        builder.button(text="💬 Чаты")
         builder.button(text="👤 Мой профиль")
-        builder.adjust(2, 2, 2, 2, 1)
+        builder.adjust(2, 2, 2, 2, 1, 1)
         return builder.as_markup(resize_keyboard=True)
     
     @staticmethod
@@ -480,4 +481,45 @@ class AdminKeyboards:
         builder.adjust(1)
         builder.button(text="◀️ Назад", callback_data="admin_assignments_menu")
 
+        return builder.as_markup()
+    
+    @staticmethod
+    def chat_list(chats: List, page: int = 1, per_page: int = 10, total_count: int = None) -> InlineKeyboardMarkup:
+        """Список чатов с пагинацией"""
+        builder = InlineKeyboardBuilder()
+        
+        for chat in chats:
+            status_emoji = "👑" if chat.bot_status == "administrator" else "👤"
+            chat_name = chat.chat_title or f"Chat {chat.chat_id}"
+            text = f"{status_emoji} {chat_name} ({chat.chat_id})"
+            builder.button(text=text, callback_data=f"admin_view_chat_{chat.id}")
+        
+        # Пагинация
+        if total_count is not None:
+            total_pages = (total_count + per_page - 1) // per_page
+        else:
+            total_pages = (len(chats) + per_page - 1) // per_page
+        
+        nav_buttons = []
+        
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_chats_page_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_chats_page_{page+1}"))
+        
+        builder.adjust(1)
+        builder.row(*nav_buttons)
+        builder.button(text="❌ Закрыть", callback_data="cancel")
+        
+        return builder.as_markup()
+    
+    @staticmethod
+    def chat_actions(chat_db_id: int) -> InlineKeyboardMarkup:
+        """Действия с чатом"""
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✉️ Написать сообщение в этот чат", callback_data=f"admin_send_message_chat_{chat_db_id}")
+        builder.button(text="🗑 Удалить чат", callback_data=f"admin_delete_chat_{chat_db_id}")
+        builder.button(text="◀️ Назад к списку", callback_data="admin_chats_list")
+        builder.adjust(1)
         return builder.as_markup()

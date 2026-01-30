@@ -5,10 +5,6 @@ from . import common, admin, buyer, executor
 
 def register_handlers(dp: Dispatcher):
     """Регистрация всех обработчиков"""
-    
-    # Регистрируем обработчики в порядке приоритета
-    
-    # 1. Общие обработчики (доступны всем)
     dp.include_router(common.router)
     
     # 2. Обработчики для администраторов
