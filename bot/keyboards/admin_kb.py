@@ -531,12 +531,103 @@ class AdminKeyboards:
         builder.button(text="❌ Закрыть", callback_data="cancel")
         
         return builder.as_markup()
+
+    @staticmethod
+    def chat_task_executor_list(
+        executors: List[User],
+        page: int = 1,
+        per_page: int = 8,
+        total_count: int = None
+    ) -> InlineKeyboardMarkup:
+        """Список исполнителей для отправки задачи в чат"""
+        builder = InlineKeyboardBuilder()
+        
+        for executor in executors:
+            name = f"{executor.first_name or 'User'} {executor.last_name or ''}".strip()
+            username = f"@{executor.username}" if executor.username else "без username"
+            text = f"👤 {name} ({username})"
+            if len(text) > 40:
+                text = text[:37] + "..."
+            builder.button(text=text, callback_data=f"admin_chat_task_select_executor_{executor.id}")
+        
+        if total_count is not None:
+            total_pages = (total_count + per_page - 1) // per_page
+        else:
+            total_pages = (len(executors) + per_page - 1) // per_page
+        
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_chat_task_executors_page_{page-1}"))
+        if total_pages > 1:
+            nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_chat_task_executors_page_{page+1}"))
+        
+        builder.adjust(1)
+        if nav_buttons:
+            builder.row(*nav_buttons)
+        
+        builder.button(text="◀️ Назад к чату", callback_data="admin_chat_task_back_to_chat")
+        builder.button(text="❌ Отменить", callback_data="cancel")
+        builder.adjust(1)
+        
+        return builder.as_markup()
+
+    @staticmethod
+    def chat_task_list(
+        tasks: List,
+        page: int = 1,
+        per_page: int = 10,
+        total_count: int = None
+    ) -> InlineKeyboardMarkup:
+        """Список задач для отправки в чат"""
+        builder = InlineKeyboardBuilder()
+        
+        status_emoji = {
+            TaskStatus.PENDING: "⏳",
+            TaskStatus.IN_PROGRESS: "🟡",
+            TaskStatus.COMPLETED: "✅",
+            TaskStatus.APPROVED: "🎉",
+            TaskStatus.REJECTED: "❌",
+            TaskStatus.CANCELLED: "🚫"
+        }
+        
+        for task in tasks:
+            emoji = status_emoji.get(task.status, "📋")
+            title_short = (task.title[:30] + "...") if len(task.title) > 30 else task.title
+            builder.button(
+                text=f"{emoji} {task.task_number}: {title_short}",
+                callback_data=f"admin_chat_task_select_{task.id}"
+            )
+        
+        if total_count is None:
+            total_count = len(tasks)
+        total_pages = (total_count + per_page - 1) // per_page
+        
+        nav_buttons = []
+        if total_pages > 1:
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_chat_task_tasks_page_{page-1}"))
+            nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_chat_task_tasks_page_{page+1}"))
+        
+        builder.adjust(1)
+        if nav_buttons:
+            builder.row(*nav_buttons)
+        
+        builder.button(text="◀️ Назад к исполнителям", callback_data="admin_chat_task_back_to_executors")
+        builder.button(text="❌ Отменить", callback_data="cancel")
+        builder.adjust(1)
+        
+        return builder.as_markup()
     
     @staticmethod
     def chat_actions(chat_db_id: int) -> InlineKeyboardMarkup:
         """Действия с чатом"""
         builder = InlineKeyboardBuilder()
         builder.button(text="✉️ Написать сообщение в этот чат", callback_data=f"admin_send_message_chat_{chat_db_id}")
+        builder.button(text="📤 Отправить задачу в чат", callback_data=f"admin_send_task_chat_{chat_db_id}")
         builder.button(text="🗑 Удалить чат", callback_data=f"admin_delete_chat_{chat_db_id}")
         builder.button(text="◀️ Назад к списку", callback_data="admin_chats_list")
         builder.adjust(1)

@@ -2,15 +2,17 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, ChatMemberUpdated
 from aiogram.filters import Command
+from datetime import datetime
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from db.engine import AsyncSessionLocal
-from db.queries import UserQueries, TaskQueries
+from db.queries import UserQueries, TaskQueries, LogQueries
 from db.queries.chat_queries import ChatQueries
 from db.queries.channel_queries import ChannelQueries
-from db.models import UserRole, DirectionType, TaskStatus
+from db.models import UserRole, DirectionType, TaskStatus, ActionLog
 from bot.keyboards.admin_kb import AdminKeyboards
 from bot.keyboards.buyer_kb import BuyerKeyboards
 from bot.keyboards.executor_kb import ExecutorKeyboards
@@ -276,6 +278,147 @@ async def callback_back(callback: CallbackQuery, state: FSMContext):
 async def callback_page_info(callback: CallbackQuery):
     """Информация о странице"""
     await callback.answer("Информация о текущей странице", show_alert=False)
+
+
+@router.callback_query(F.data.startswith("chat_task_complete_"))
+async def callback_chat_task_complete(callback: CallbackQuery):
+    """Отметить задачу как выполненную из чата"""
+    task_id_str = callback.data.replace("chat_task_complete_", "")
+    if not task_id_str.isdigit():
+        await callback.answer("❌ Некорректный идентификатор задачи", show_alert=True)
+        return
+    
+    task_id = int(task_id_str)
+    
+    async with AsyncSessionLocal() as session:
+        task = await TaskQueries.get_task_by_id(session, task_id)
+        
+        if not task:
+            await callback.answer("❌ Задача не найдена", show_alert=True)
+            return
+        
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.CANCELLED}:
+            await callback.answer("❌ Задача уже закрыта", show_alert=True)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+            return
+        
+        chat = callback.message.chat
+        chat_title = chat.title or chat.username or f"Chat {chat.id}"
+        
+        user_full_name = callback.from_user.full_name
+        user_username = f"@{callback.from_user.username}" if callback.from_user.username else None
+        user_display = f"{user_full_name} ({user_username})" if user_username else user_full_name
+        
+        actor = await UserQueries.get_user_by_telegram_id(
+            session,
+            callback.from_user.id,
+            active_only=False
+        )
+
+        updated_task = await TaskQueries.update_task_status(
+            session=session,
+            task_id=task_id,
+            new_status=TaskStatus.COMPLETED,
+            user_id=actor.id if actor else None,
+            comment="Задача выполнена (чат)"
+        )
+        if not updated_task:
+            await callback.answer("❌ Не удалось обновить статус задачи", show_alert=True)
+            return
+        task = updated_task
+
+        try:
+            await LogQueries.create_task_log(
+                session=session,
+                task_id=task_id,
+                user_id=actor.id if actor else None,
+                action="chat_complete",
+                details={
+                    "chat_id": chat.id,
+                    "chat_title": chat_title,
+                    "telegram_user_id": callback.from_user.id,
+                    "telegram_username": callback.from_user.username,
+                    "telegram_full_name": callback.from_user.full_name,
+                    "message_id": callback.message.message_id if callback.message else None
+                }
+            )
+        except Exception as e:
+            logger.error(f"Не удалось записать лог по задаче {task_id}: {e}")
+        
+        # Уведомляем баера
+        if task.creator:
+            notify_text = f"""
+✅ <b>Задача отмечена как выполненная</b>
+
+📋 <b>{task.task_number}: {task.title}</b>
+👤 <b>Кто отметил:</b> {user_display}
+💬 <b>Чат:</b> {chat_title}
+
+Проверьте результат в чате.
+"""
+            try:
+                await callback.bot.send_message(
+                    chat_id=task.creator.telegram_id,
+                    text=notify_text,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить баера {task.creator.telegram_id}: {e}")
+
+        # Уведомляем тимлида (кто отправил задачу в чат)
+        try:
+            result = await session.execute(
+                select(ActionLog)
+                .where(
+                    ActionLog.action_type == "chat_task_sent",
+                    ActionLog.entity_type == "task",
+                    ActionLog.entity_id == task.id
+                )
+                .order_by(ActionLog.created_at.desc())
+                .limit(1)
+            )
+            action_log = result.scalar_one_or_none()
+            if action_log and action_log.user_id:
+                teamlead = await UserQueries.get_user_by_id(session, action_log.user_id)
+                if teamlead:
+                    if not task.creator or teamlead.telegram_id != task.creator.telegram_id:
+                        teamlead_text = f"""
+✅ <b>Задача выполнена (чат)</b>
+
+📋 <b>{task.task_number}: {task.title}</b>
+👤 <b>Кто отметил:</b> {user_display}
+💬 <b>Чат:</b> {chat_title}
+"""
+                        await callback.bot.send_message(
+                            chat_id=teamlead.telegram_id,
+                            text=teamlead_text,
+                            parse_mode="HTML"
+                        )
+        except Exception as e:
+            logger.error(f"Не удалось уведомить тимлида по задаче {task.task_number}: {e}")
+        
+        # Уведомляем чат
+        completed_at = datetime.now().strftime("%d.%m.%Y %H:%M")
+        chat_text = (
+            f"✅ Задача {task.task_number} отмечена как выполненная.\n"
+            f"👤 Выполнил: {user_display}\n"
+            f"🕒 {completed_at}"
+        )
+        try:
+            await callback.message.reply(chat_text)
+        except Exception as e:
+            logger.error(f"Не удалось отправить сообщение в чат {chat.id}: {e}")
+        
+        # Убираем кнопку, чтобы избежать повторных нажатий
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as e:
+            logger.warning(f"Не удалось убрать клавиатуру у сообщения в чате {chat.id}: {e}")
+    
+    await callback.answer("✅ Отмечено")
 
 
 @router.message(F.text == "🔄 Обновить")
