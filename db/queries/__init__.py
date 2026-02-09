@@ -7,6 +7,8 @@ from .file_queries import FileQueries
 from .log_queries import LogQueries
 from .channel_queries import ChannelQueries
 from .chat_queries import ChatQueries
+from .chat_access_queries import ChatAccessQueries
+from .chat_request_queries import ChatRequestQueries
 
 __all__ = [
     "UserQueries",
@@ -15,6 +17,8 @@ __all__ = [
     "FileQueries",
     "LogQueries",
     "ChannelQueries",
-    "ChatQueries"
+    "ChatQueries",
+    "ChatAccessQueries",
+    "ChatRequestQueries",
 ]
 

@@ -19,8 +19,9 @@ class AdminKeyboards:
         builder.button(text="📋 Все задачи")
         builder.button(text="⚙️ Настройки каналов логов")
         builder.button(text="💬 Чаты")
+        builder.button(text="🔑 Выдача чатов")
         builder.button(text="👤 Мой профиль")
-        builder.adjust(2, 2, 2, 2, 1, 1)
+        builder.adjust(2, 2, 2, 2, 1)
         return builder.as_markup(resize_keyboard=True)
     
     @staticmethod
@@ -132,6 +133,95 @@ class AdminKeyboards:
         builder.button(text="◀️ Назад", callback_data="admin_main")
         builder.adjust(1)
         return builder.as_markup()
+
+    @staticmethod
+    def chat_access_buyers_list(
+        buyers: List[User],
+        page: int = 1,
+        per_page: int = 10,
+        total_count: int | None = None,
+    ) -> InlineKeyboardMarkup:
+        """Выбор баера для выдачи чатов."""
+        builder = InlineKeyboardBuilder()
+
+        for buyer in buyers:
+            name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip()
+            username = f"@{buyer.username}" if buyer.username else ""
+            builder.button(
+                text=f"👔 {name} {username}".strip(),
+                callback_data=f"admin_chat_access_select_buyer_{buyer.id}",
+            )
+
+        if total_count is None:
+            total_count = len(buyers)
+        total_pages = max((total_count + per_page - 1) // per_page, 1)
+
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_chat_access_buyers_page_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_chat_access_buyers_page_{page+1}"))
+
+        builder.adjust(1)
+        if nav_buttons:
+            builder.row(*nav_buttons)
+        builder.button(text="❌ Закрыть", callback_data="cancel")
+        return builder.as_markup()
+
+    @staticmethod
+    def chat_access_chats_list(
+        chats: List,
+        page: int = 1,
+        per_page: int = 8,
+        total_count: int | None = None,
+    ) -> InlineKeyboardMarkup:
+        """Выбор чата для выдачи доступа выбранному баеру."""
+        builder = InlineKeyboardBuilder()
+
+        if not chats:
+            builder.button(text="❌ Чаты не найдены", callback_data="noop")
+        else:
+            for chat in chats:
+                status_emoji = "👑" if chat.bot_status == "administrator" else "👤"
+                name = chat.chat_title if chat.chat_title else f"Chat {chat.chat_id}"
+                builder.button(
+                    text=f"{status_emoji} {name}",
+                    callback_data=f"admin_chat_access_select_chat_{chat.id}",
+                )
+
+        if total_count is None:
+            total_count = len(chats)
+        total_pages = max((total_count + per_page - 1) // per_page, 1)
+
+        nav_buttons = []
+        if total_pages > 1:
+            if page > 1:
+                nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin_chat_access_chats_page_{page-1}"))
+            nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="page_info"))
+            if page < total_pages:
+                nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin_chat_access_chats_page_{page+1}"))
+
+        builder.adjust(1)
+        if nav_buttons:
+            builder.row(*nav_buttons)
+        builder.button(text="◀️ Назад к баерам", callback_data="admin_chat_access_back_to_buyers")
+        builder.button(text="❌ Закрыть", callback_data="cancel")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
+    def chat_access_actions(is_granted: bool) -> InlineKeyboardMarkup:
+        """Кнопки выдачи/отзыва доступа в выбранном чате."""
+        builder = InlineKeyboardBuilder()
+        if is_granted:
+            builder.button(text="❌ Забрать доступ", callback_data="admin_chat_access_toggle")
+        else:
+            builder.button(text="✅ Выдать доступ", callback_data="admin_chat_access_toggle")
+        builder.button(text="◀️ Назад к чатам", callback_data="admin_chat_access_back_to_chats")
+        builder.button(text="❌ Закрыть", callback_data="cancel")
+        builder.adjust(1)
+        return builder.as_markup()
     
     @staticmethod
     def period_selector() -> InlineKeyboardMarkup:
@@ -215,7 +305,6 @@ class AdminKeyboards:
             builder.button(text=text, callback_data=f"admin_view_application_{user.id}")
         
         builder.adjust(1)
-        builder.button(text="🔄 Обновить", callback_data="admin_applications")
         builder.button(text="❌ Закрыть", callback_data="cancel")
         
         return builder.as_markup()
@@ -279,7 +368,6 @@ class AdminKeyboards:
         builder.adjust(1)
         if nav_buttons:
             builder.row(*nav_buttons)
-        builder.button(text="🔄 Обновить", callback_data="admin_refresh_tasks")
         builder.button(text="❌ Закрыть", callback_data="cancel")
         
         return builder.as_markup()
@@ -578,7 +666,9 @@ class AdminKeyboards:
         tasks: List,
         page: int = 1,
         per_page: int = 10,
-        total_count: int = None
+        total_count: int = None,
+        back_text: str = "◀️ Назад к исполнителям",
+        back_callback: str = "admin_chat_task_back_to_executors",
     ) -> InlineKeyboardMarkup:
         """Список задач для отправки в чат"""
         builder = InlineKeyboardBuilder()
@@ -616,19 +706,20 @@ class AdminKeyboards:
         if nav_buttons:
             builder.row(*nav_buttons)
         
-        builder.button(text="◀️ Назад к исполнителям", callback_data="admin_chat_task_back_to_executors")
+        builder.button(text=back_text, callback_data=back_callback)
         builder.button(text="❌ Отменить", callback_data="cancel")
         builder.adjust(1)
         
         return builder.as_markup()
     
     @staticmethod
-    def chat_actions(chat_db_id: int) -> InlineKeyboardMarkup:
+    def chat_actions(chat_db_id: int, include_delete: bool = True) -> InlineKeyboardMarkup:
         """Действия с чатом"""
         builder = InlineKeyboardBuilder()
         builder.button(text="✉️ Написать сообщение в этот чат", callback_data=f"admin_send_message_chat_{chat_db_id}")
         builder.button(text="📤 Отправить задачу в чат", callback_data=f"admin_send_task_chat_{chat_db_id}")
-        builder.button(text="🗑 Удалить чат", callback_data=f"admin_delete_chat_{chat_db_id}")
+        if include_delete:
+            builder.button(text="🗑 Удалить чат", callback_data=f"admin_delete_chat_{chat_db_id}")
         builder.button(text="◀️ Назад к списку", callback_data="admin_chats_list")
         builder.adjust(1)
         return builder.as_markup()

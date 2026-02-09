@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 
 from db.engine import AsyncSessionLocal
-from db.queries import UserQueries, TaskQueries, LogQueries, FileQueries, MessageQueries
+from db.queries import (
+    UserQueries,
+    TaskQueries,
+    LogQueries,
+    FileQueries,
+    MessageQueries,
+    ChatAccessQueries,
+    ChatRequestQueries,
+)
 from db.queries.chat_queries import ChatQueries
 from db.models import UserRole, DirectionType, TaskStatus, Task
 from bot.keyboards.admin_kb import AdminKeyboards
@@ -882,6 +890,8 @@ async def callback_general_stats(callback: CallbackQuery):
             select(sql_func.count(Task.id)).where(Task.status == TaskStatus.APPROVED)
         )
         completed = completed_result.scalar()
+
+        chat_done, chat_not_done = await ChatRequestQueries.count_global(session)
         
         text = f"""
 📊 <b>ОБЩАЯ СТАТИСТИКА</b>
@@ -897,6 +907,10 @@ async def callback_general_stats(callback: CallbackQuery):
    • Всего: {total_tasks}
    • 🟡 В работе: {in_progress}
    • ✅ Завершено: {completed}
+
+💬 <b>Запросы в чатах:</b>
+   ✅ Выполнение: {chat_done}
+   ❌ Невыполнение: {chat_not_done}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
@@ -1512,6 +1526,8 @@ async def callback_period_selected(callback: CallbackQuery):
             )
         )
         completed = completed_result.scalar()
+
+        chat_done, chat_not_done = await ChatRequestQueries.count_global(session, start_date=start_date)
         
         text = f"""
 📊 <b>СТАТИСТИКА: {period_name.upper()}</b>
@@ -1521,6 +1537,10 @@ async def callback_period_selected(callback: CallbackQuery):
 
 📋 <b>Создано задач:</b> {created}
 ✅ <b>Завершено задач:</b> {completed}
+
+💬 <b>Запросы в чатах:</b>
+   ✅ Выполнение: {chat_done}
+   ❌ Невыполнение: {chat_not_done}
 
 <b>Процент выполнения:</b>
    {round(completed / created * 100) if created > 0 else 0}%
@@ -2010,42 +2030,6 @@ async def callback_admin_all_tasks(callback: CallbackQuery):
         )
     
     await callback.answer()
-
-
-@router.callback_query(F.data == "admin_refresh_tasks")
-async def callback_admin_refresh_tasks(callback: CallbackQuery):
-    """Обновление списка задач администратора"""
-    async with AsyncSessionLocal() as session:
-        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
-        
-        if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа")
-            return
-        
-        from sqlalchemy import select
-        from db.models import Task
-        
-        result = await session.execute(
-            select(Task)
-            .order_by(Task.created_at.desc())
-            .limit(20)
-        )
-        tasks = result.scalars().all()
-        
-        if not tasks:
-            await callback.message.edit_text("📋 Задач пока нет")
-            await callback.answer("Список обновлен")
-            return
-        
-        text = "📋 <b>ВСЕ ЗАДАЧИ</b> (последние 20)\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        
-        await callback.message.edit_text(
-            text,
-            reply_markup=AdminKeyboards.task_list(tasks),
-            parse_mode="HTML"
-        )
-    
-    await callback.answer("Список обновлен")
 
 
 @router.callback_query(F.data.startswith("admin_tasks_page_"))
@@ -3454,6 +3438,341 @@ async def callback_view_executor_buyers(callback: CallbackQuery):
 
 # ============ УПРАВЛЕНИЕ ЧАТАМИ ============
 
+# ============ ВЫДАЧА ДОСТУПА К ЧАТАМ (для баеров) ============
+
+
+@router.message(F.text == "🔑 Выдача чатов")
+async def admin_chat_access_menu(message: Message, state: FSMContext):
+    """Выдача доступа баерам к конкретным чатам."""
+    await state.clear()
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await message.answer("❌ У вас нет доступа к этой функции")
+            return
+
+        page = 1
+        per_page = 10
+        total_count = await UserQueries.count_users_by_role(session, role=UserRole.BUYER)
+        if total_count == 0:
+            await message.answer(
+                "🔑 <b>ВЫДАЧА ЧАТОВ</b>\n\n❌ Баеры не найдены.",
+                parse_mode="HTML",
+            )
+            return
+
+        buyers = await UserQueries.get_all_users(session, role=UserRole.BUYER, page=page, per_page=per_page)
+        await state.set_state(AdminStates.waiting_chat_access_buyer)
+
+        text = """
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Выберите баера, которому нужно выдать доступ к чату:
+"""
+        await message.answer(
+            text,
+            reply_markup=AdminKeyboards.chat_access_buyers_list(
+                buyers,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+
+
+@router.callback_query(F.data.startswith("admin_chat_access_buyers_page_"), AdminStates.waiting_chat_access_buyer)
+async def callback_admin_chat_access_buyers_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.replace("admin_chat_access_buyers_page_", ""))
+    per_page = 10
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        total_count = await UserQueries.count_users_by_role(session, role=UserRole.BUYER)
+        buyers = await UserQueries.get_all_users(session, role=UserRole.BUYER, page=page, per_page=per_page)
+
+        text = """
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Выберите баера, которому нужно выдать доступ к чату:
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_buyers_list(
+                buyers,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_chat_access_select_buyer_"), AdminStates.waiting_chat_access_buyer)
+async def callback_admin_chat_access_select_buyer(callback: CallbackQuery, state: FSMContext):
+    buyer_id = int(callback.data.replace("admin_chat_access_select_buyer_", ""))
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        buyer = await UserQueries.get_user_by_id(session, buyer_id)
+        if not buyer or buyer.role != UserRole.BUYER:
+            await callback.answer("❌ Баер не найден", show_alert=True)
+            return
+
+        await state.update_data(chat_access_buyer_id=buyer_id)
+        await state.set_state(AdminStates.waiting_chat_access_chat)
+
+        page = 1
+        per_page = 8
+        total_count = await ChatQueries.count_chats(session)
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+
+        buyer_name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip()
+        text = f"""
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👔 <b>Баер:</b> {buyer_name}
+
+Выберите чат:
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_chats_list(
+                chats,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_chat_access_back_to_buyers", AdminStates.waiting_chat_access_chat)
+async def callback_admin_chat_access_back_to_buyers(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        page = 1
+        per_page = 10
+        total_count = await UserQueries.count_users_by_role(session, role=UserRole.BUYER)
+        buyers = await UserQueries.get_all_users(session, role=UserRole.BUYER, page=page, per_page=per_page)
+        await state.set_state(AdminStates.waiting_chat_access_buyer)
+
+        text = """
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Выберите баера, которому нужно выдать доступ к чату:
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_buyers_list(
+                buyers,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_chat_access_chats_page_"), AdminStates.waiting_chat_access_chat)
+async def callback_admin_chat_access_chats_page(callback: CallbackQuery, state: FSMContext):
+    page = int(callback.data.replace("admin_chat_access_chats_page_", ""))
+    per_page = 8
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        data = await state.get_data()
+        buyer_id = data.get("chat_access_buyer_id")
+        buyer = await UserQueries.get_user_by_id(session, buyer_id) if buyer_id else None
+        if not buyer:
+            await callback.answer("❌ Баер не выбран", show_alert=True)
+            return
+
+        total_count = await ChatQueries.count_chats(session)
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+
+        buyer_name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip()
+        text = f"""
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👔 <b>Баер:</b> {buyer_name}
+
+Выберите чат:
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_chats_list(
+                chats,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_chat_access_select_chat_"), AdminStates.waiting_chat_access_chat)
+async def callback_admin_chat_access_select_chat(callback: CallbackQuery, state: FSMContext):
+    chat_db_id = int(callback.data.replace("admin_chat_access_select_chat_", ""))
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        data = await state.get_data()
+        buyer_id = data.get("chat_access_buyer_id")
+        buyer = await UserQueries.get_user_by_id(session, buyer_id) if buyer_id else None
+        if not buyer:
+            await callback.answer("❌ Баер не выбран", show_alert=True)
+            return
+
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+        if not chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+
+        is_granted = await ChatAccessQueries.has_access(session, buyer_id, chat_db_id)
+        await state.update_data(chat_access_chat_db_id=chat_db_id)
+
+        buyer_name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip()
+        chat_name = chat.chat_title or f"Chat {chat.chat_id}"
+        access_text = "✅ Доступ выдан" if is_granted else "❌ Доступ не выдан"
+
+        text = f"""
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👔 <b>Баер:</b> {buyer_name}
+💬 <b>Чат:</b> {chat_name}
+
+<b>Статус:</b> {access_text}
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_actions(is_granted),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_chat_access_back_to_chats", AdminStates.waiting_chat_access_chat)
+async def callback_admin_chat_access_back_to_chats(callback: CallbackQuery, state: FSMContext):
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        data = await state.get_data()
+        buyer_id = data.get("chat_access_buyer_id")
+        buyer = await UserQueries.get_user_by_id(session, buyer_id) if buyer_id else None
+        if not buyer:
+            await callback.answer("❌ Баер не выбран", show_alert=True)
+            return
+
+        page = 1
+        per_page = 8
+        total_count = await ChatQueries.count_chats(session)
+        chats = await ChatQueries.get_all_chats(session, page=page, per_page=per_page)
+
+        buyer_name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip()
+        text = f"""
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👔 <b>Баер:</b> {buyer_name}
+
+Выберите чат:
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_chats_list(
+                chats,
+                page=page,
+                per_page=per_page,
+                total_count=total_count,
+            ),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_chat_access_toggle", AdminStates.waiting_chat_access_chat)
+async def callback_admin_chat_access_toggle(callback: CallbackQuery, state: FSMContext):
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            await callback.answer("❌ У вас нет доступа", show_alert=True)
+            return
+
+        data = await state.get_data()
+        buyer_id = data.get("chat_access_buyer_id")
+        chat_db_id = data.get("chat_access_chat_db_id")
+        if not buyer_id or not chat_db_id:
+            await callback.answer("❌ Не выбран баер/чат", show_alert=True)
+            return
+
+        is_granted = await ChatAccessQueries.has_access(session, buyer_id, chat_db_id)
+        if is_granted:
+            ok = await ChatAccessQueries.revoke_access(session, buyer_id, chat_db_id)
+            is_granted = False if ok else True
+        else:
+            ok = await ChatAccessQueries.grant_access(session, buyer_id, chat_db_id, created_by_id=user.id)
+            is_granted = True if ok else False
+
+        buyer = await UserQueries.get_user_by_id(session, buyer_id)
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+
+        buyer_name = f"{buyer.first_name or 'User'} {buyer.last_name or ''}".strip() if buyer else str(buyer_id)
+        chat_name = chat.chat_title or f"Chat {chat.chat_id}" if chat else str(chat_db_id)
+        access_text = "✅ Доступ выдан" if is_granted else "❌ Доступ не выдан"
+
+        text = f"""
+🔑 <b>ВЫДАЧА ЧАТОВ</b>
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+👔 <b>Баер:</b> {buyer_name}
+💬 <b>Чат:</b> {chat_name}
+
+<b>Статус:</b> {access_text}
+"""
+        await callback.message.edit_text(
+            text,
+            reply_markup=AdminKeyboards.chat_access_actions(is_granted),
+            parse_mode="HTML",
+        )
+        await callback.answer("✅ Готово")
+
 @router.message(F.text == "💬 Чаты")
 async def admin_chats_menu(message: Message):
     """Меню управления чатами"""
@@ -3461,8 +3780,10 @@ async def admin_chats_menu(message: Message):
         user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await message.answer("❌ У вас нет доступа к этой функции")
-            return
+            # Позволяем другим роутерам обработать это сообщение
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         # Получаем список чатов
         total_count = await ChatQueries.count_chats(session)
@@ -3497,8 +3818,9 @@ async def callback_chats_list(callback: CallbackQuery):
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         total_count = await ChatQueries.count_chats(session)
         
@@ -3537,8 +3859,9 @@ async def callback_chats_page(callback: CallbackQuery):
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         total_count = await ChatQueries.count_chats(session)
         
@@ -3590,7 +3913,7 @@ async def _render_chat_info(callback: CallbackQuery, chat):
     
     await callback.message.edit_text(
         text,
-        reply_markup=AdminKeyboards.chat_actions(chat.id),
+        reply_markup=AdminKeyboards.chat_actions(chat.id, include_delete=True),
         parse_mode="HTML"
     )
 
@@ -3637,8 +3960,9 @@ async def callback_view_chat(callback: CallbackQuery):
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
         
@@ -3660,8 +3984,9 @@ async def callback_send_message_chat(callback: CallbackQuery, state: FSMContext)
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
         
@@ -3688,6 +4013,13 @@ async def callback_send_message_chat(callback: CallbackQuery, state: FSMContext)
 async def process_chat_message(message: Message, state: FSMContext, bot: Bot):
     """Обработка сообщения для отправки в чат"""
     data = await state.get_data()
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
     chat_db_id = data.get("chat_db_id")
     chat_telegram_id = data.get("chat_telegram_id")
     
@@ -3793,8 +4125,9 @@ async def callback_send_task_chat(callback: CallbackQuery, state: FSMContext):
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
         
@@ -3867,8 +4200,9 @@ async def callback_chat_task_executors_page(callback: CallbackQuery, state: FSMC
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         data = await state.get_data()
         chat_title = data.get("chat_title", "Чат")
@@ -3925,8 +4259,9 @@ async def callback_chat_task_select_executor(callback: CallbackQuery, state: FSM
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         executor = await UserQueries.get_user_by_id(session, executor_id)
         
@@ -3983,8 +4318,9 @@ async def callback_chat_task_tasks_page(callback: CallbackQuery, state: FSMConte
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         data = await state.get_data()
         executor_id = data.get("selected_executor_id")
@@ -4034,8 +4370,9 @@ async def callback_chat_task_select(callback: CallbackQuery, state: FSMContext, 
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         data = await state.get_data()
         chat_db_id = data.get("chat_db_id")
@@ -4151,8 +4488,9 @@ async def callback_chat_task_back_to_executors(callback: CallbackQuery, state: F
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         data = await state.get_data()
         chat_title = data.get("chat_title", "Чат")
@@ -4211,8 +4549,9 @@ async def callback_chat_task_back_to_chat(callback: CallbackQuery, state: FSMCon
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         data = await state.get_data()
         chat_db_id = data.get("chat_db_id")
@@ -4242,8 +4581,9 @@ async def callback_delete_chat(callback: CallbackQuery):
         user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not user or user.role != UserRole.ADMIN:
-            await callback.answer("❌ У вас нет доступа", show_alert=True)
-            return
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
         
         chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
         

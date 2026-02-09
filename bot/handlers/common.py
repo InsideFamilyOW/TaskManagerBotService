@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from db.engine import AsyncSessionLocal
-from db.queries import UserQueries, TaskQueries, LogQueries
+from db.queries import UserQueries, TaskQueries, LogQueries, ChatRequestQueries
 from db.queries.chat_queries import ChatQueries
 from db.queries.channel_queries import ChannelQueries
 from db.models import UserRole, DirectionType, TaskStatus, ActionLog
@@ -421,28 +421,76 @@ async def callback_chat_task_complete(callback: CallbackQuery):
     await callback.answer("✅ Отмечено")
 
 
-@router.message(F.text == "🔄 Обновить")
-async def refresh_data(message: Message):
-    """Обновление данных"""
+@router.callback_query(F.data.startswith("chat_request_complete_"))
+async def callback_chat_request_complete(callback: CallbackQuery):
+    """Отметить запрос (сообщение баера в чат) как выполненный."""
+    request_id_str = callback.data.replace("chat_request_complete_", "")
+    if not request_id_str.isdigit():
+        await callback.answer("❌ Некорректный идентификатор", show_alert=True)
+        return
+
+    request_id = int(request_id_str)
+
     async with AsyncSessionLocal() as session:
-        user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
-        
-        if not user:
+        chat_request = await ChatRequestQueries.get_by_id(session, request_id)
+        if not chat_request:
+            await callback.answer("❌ Запрос не найден", show_alert=True)
             return
-        
-        await message.answer("🔄 Данные обновлены!", show_alert=False)
-        
-        # Отправляем главное меню
-        if user.role == UserRole.ADMIN:
-            keyboard = AdminKeyboards.main_menu()
-        elif user.role == UserRole.BUYER:
-            keyboard = BuyerKeyboards.main_menu()
-        elif user.role == UserRole.EXECUTOR:
-            keyboard = ExecutorKeyboards.main_menu()
-        else:
+
+        if chat_request.is_completed:
+            await callback.answer("✅ Уже отмечено", show_alert=False)
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                pass
             return
-        
-        await message.answer("Выберите действие:", reply_markup=keyboard)
+
+        actor = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id, active_only=False)
+
+        was_marked = await ChatRequestQueries.mark_completed(
+            session,
+            request_id,
+            completed_by_telegram_id=callback.from_user.id,
+            completed_by_user_id=actor.id if actor else None,
+        )
+
+        if not was_marked:
+            await callback.answer("✅ Уже отмечено", show_alert=False)
+            return
+
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        sender = await UserQueries.get_user_by_id(session, chat_request.sender_id)
+        if sender:
+            chat = callback.message.chat if callback.message else None
+            chat_title = chat_request.chat_title or (chat.title if chat else None) or f"Chat {chat_request.chat_telegram_id}"
+
+            user_full_name = callback.from_user.full_name
+            user_username = f"@{callback.from_user.username}" if callback.from_user.username else None
+            user_display = f"{user_full_name} ({user_username})" if user_username else user_full_name
+
+            preview = (chat_request.content_preview or "").strip() or "Без текста"
+
+            notify_text = f"""
+✅ <b>Запрос выполнен</b>
+
+💬 <b>Чат:</b> {chat_title}
+📝 <b>Сообщение:</b> {preview}
+👤 <b>Кто отметил:</b> {user_display}
+"""
+            try:
+                await callback.bot.send_message(
+                    chat_id=sender.telegram_id,
+                    text=notify_text,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить баера {sender.telegram_id}: {e}")
+
+    await callback.answer("✅ Отмечено")
 
 
 @router.message(F.text == "📋 Мои задачи")

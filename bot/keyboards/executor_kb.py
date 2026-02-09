@@ -16,8 +16,7 @@ class ExecutorKeyboards:
         builder.button(text="🆕 Новые задачи")
         builder.button(text="📊 Моя статистика")
         builder.button(text="👤 Мой профиль")
-        builder.button(text="🔄 Обновить")
-        builder.adjust(2, 2, 1)
+        builder.adjust(2, 2)
         return builder.as_markup(resize_keyboard=True)
     
     @staticmethod
@@ -78,9 +77,9 @@ class ExecutorKeyboards:
             builder.button(text="◀️ Назад к задачам", callback_data="executor_my_tasks")
             # adjust(1, 1, 2, 2, 1, 1) - первая строка 1 кнопка (ВЫПОЛНИТЬ), вторая 1 кнопка (ОТКАЗАТЬСЯ если can_reject), затем по 2 кнопки, потом по 1
             if can_reject:
-                builder.adjust(1, 1, 2, 2, 1, 1)
+                builder.adjust(1, 1, 2, 2, 1)
             else:
-                builder.adjust(1, 2, 2, 1)
+                builder.adjust(1, 2, 2)
         elif task_status == TaskStatus.COMPLETED:
             # Задача выполнена, ждет проверки
             builder.button(text="💬 СООБЩЕНИЕ", callback_data=f"executor_message_{task_id}")

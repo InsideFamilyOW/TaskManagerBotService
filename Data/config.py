@@ -1,8 +1,42 @@
 import os
 import sys
-from dotenv import load_dotenv
+from pathlib import Path
+from dotenv import load_dotenv, dotenv_values
 
-load_dotenv()
+
+def _load_env_from_project_root() -> Path:
+    """
+    Load .env from the project root независимо от текущего cwd.
+
+    Частая причина "BOT_TOKEN не установлен" при наличии .env:
+    запуск из IDE/ярлыка/абсолютным путём с cwd != корень проекта.
+    """
+    project_root = Path(__file__).resolve().parent.parent  # Data/ -> project root
+    env_path = project_root / ".env"
+
+    # Не перетираем реальные переменные окружения, если они уже заданы.
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+
+        # If the environment contains empty values (e.g. BOT_TOKEN=""), python-dotenv
+        # will not overwrite them with override=False. Fill blanks from .env.
+        values = dotenv_values(dotenv_path=env_path)
+        for k, v in values.items():
+            if not k or v is None:
+                continue
+
+            # UTF-8 BOM in .env can be parsed as part of the first key name on Windows.
+            # Normalize it so "BOT_TOKEN" is found even if the file starts with BOM.
+            nk = k.lstrip("\ufeff")
+            if os.environ.get(nk, "").strip() == "":
+                os.environ[nk] = str(v)
+    else:
+        load_dotenv(override=False)
+
+    return env_path
+
+
+ENV_PATH = _load_env_from_project_root()
 
 ADMIN_TG_ID_STR = os.getenv("ADMIN_TG_ID", "")
 ADMIN_TG_ID = [int(id.strip()) for id in ADMIN_TG_ID_STR.split(",") if id.strip()]
@@ -36,6 +70,9 @@ def validate_config():
         print("   и заполните все необходимые переменные окружения.\n")
         
         critical_errors = [e for e in errors if not e.startswith("⚠️")]
+        print(f"\nℹ️ Диагностика: cwd={os.getcwd()}")
+        print(f"ℹ️ Диагностика: ожидаемый .env={str(ENV_PATH)} (exists={ENV_PATH.exists()})")
+
         if critical_errors:
             sys.exit(1)
 
