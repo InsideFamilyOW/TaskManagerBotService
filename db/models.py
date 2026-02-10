@@ -443,3 +443,44 @@ class Chat(Base):
         Index("idx_chats_status", "bot_status", "chat_id"),
         Index("idx_chats_type", "chat_type", "bot_status"),
     )
+
+
+buyer_chat_access = Table(
+    "buyer_chat_access",
+    Base.metadata,
+    Column("buyer_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("chat_id", Integer, ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+    Column("created_by_id", Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+    UniqueConstraint("buyer_id", "chat_id", name="uq_buyer_chat_access"),
+)
+
+
+class ChatRequest(Base):
+    """Запрос (сообщение) баера в чат с кнопкой 'Выполнено'."""
+
+    __tablename__ = "chat_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    chat_db_id = Column(Integer, ForeignKey("chats.id", ondelete="SET NULL"), nullable=True, index=True)
+    chat_telegram_id = Column(BigInteger, nullable=False, index=True)
+    chat_title = Column(String(255), nullable=True)
+
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    content_type = Column(String(20), nullable=False)
+    content_preview = Column(String(500), nullable=True)
+
+    chat_message_id = Column(Integer, nullable=True, index=True)
+
+    is_completed = Column(Boolean, default=False, nullable=False, index=True)
+    completed_by_telegram_id = Column(BigInteger, nullable=True, index=True)
+    completed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    chat = relationship("Chat", foreign_keys=[chat_db_id])
+    sender = relationship("User", foreign_keys=[sender_id])
+    completed_by_user = relationship("User", foreign_keys=[completed_by_user_id])

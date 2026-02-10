@@ -16,8 +16,8 @@ class BuyerKeyboards:
         builder.button(text="📋 Мои задачи")
         builder.button(text="✅ На проверке")
         builder.button(text="📊 Статистика")
+        builder.button(text="💬 Чаты")
         builder.button(text="👤 Мой профиль")
-        builder.button(text="🔄 Обновить")
         builder.adjust(2, 2, 2)
         return builder.as_markup(resize_keyboard=True)
     

@@ -31,3 +31,7 @@ class BuyerStates(StatesGroup):
     
     waiting_task_filter = State()
     waiting_task_view = State()
+
+    # Чаты
+    waiting_chat_message = State()
+    waiting_chat_task_selection = State()

@@ -140,6 +140,14 @@ class CommonKeyboards:
         return builder.as_markup()
 
     @staticmethod
+    def chat_request_complete(request_id: int) -> InlineKeyboardMarkup:
+        """Кнопка 'Выполнено' для сообщений-запросов баера в чат."""
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✅ Выполнено", callback_data=f"chat_request_complete_{request_id}")
+        builder.adjust(1)
+        return builder.as_markup()
+
+    @staticmethod
     def pagination(page: int, total_pages: int, prefix: str) -> InlineKeyboardMarkup:
         """
         Оптимизированная пагинация

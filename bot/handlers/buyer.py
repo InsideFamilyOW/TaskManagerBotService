@@ -8,7 +8,7 @@ from typing import Dict, List
 import re
 from aiogram.filters import or_f
 from db.engine import AsyncSessionLocal
-from db.queries import UserQueries, TaskQueries, MessageQueries, FileQueries, LogQueries
+from db.queries import UserQueries, TaskQueries, MessageQueries, FileQueries, LogQueries, ChatRequestQueries
 from db.models import UserRole, DirectionType, TaskStatus, TaskPriority, FileType
 from bot.keyboards.buyer_kb import BuyerKeyboards
 from bot.keyboards.common_kb import CommonKeyboards
@@ -29,11 +29,13 @@ from log import logger
 # Импортируем обработчики файлов
 from . import buyer_files
 from . import buyer_profile
+from . import buyer_chats
 
 router = Router()
 
 router.include_router(buyer_files.router)
 router.include_router(buyer_profile.router)
+router.include_router(buyer_chats.router)
 
 
 # ============ СОЗДАНИЕ ЗАДАЧИ ============
@@ -1042,42 +1044,6 @@ async def callback_buyer_tasks_on_review(callback: CallbackQuery, state: FSMCont
     await callback.answer()
 
 
-@router.callback_query(F.data == "buyer_refresh_tasks")
-async def callback_refresh_tasks(callback: CallbackQuery, state: FSMContext):
-    """Обновление списка задач байера (оптимизировано)"""
-    await state.clear()
-    
-    async with AsyncSessionLocal() as session:
-        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
-        
-        if not user or user.role != UserRole.BUYER:
-            await callback.answer("❌ У вас нет доступа к этой функции")
-            return
-        
-        # Быстрый подсчет без загрузки данных
-        total_count = await TaskQueries.count_tasks_by_creator(session, user.id)
-        
-        if total_count == 0:
-            await callback.message.edit_text("📋 У вас пока нет задач")
-            await callback.answer("Список обновлен")
-            return
-        
-        # Загружаем только первую страницу (5 задач)
-        page = 1
-        per_page = 5
-        tasks = await TaskQueries.get_tasks_by_creator(session, user.id, page=page, per_page=per_page)
-        
-        text = f"📋 <b>МОИ ЗАДАЧИ</b>\n\n"
-        
-        await callback.message.edit_text(
-            text,
-            reply_markup=BuyerKeyboards.task_list(tasks, page=page, per_page=per_page, total_count=total_count),
-            parse_mode="HTML"
-        )
-    
-    await callback.answer("Список обновлен")
-
-
 @router.callback_query(F.data.startswith("buyer_tasks_page_"))
 async def callback_tasks_page(callback: CallbackQuery, state: FSMContext):
     """Пагинация списка задач байера (оптимизировано - загружает только нужную страницу)"""
@@ -1537,6 +1503,8 @@ async def callback_buyer_stats_general(callback: CallbackQuery):
         # Средний рейтинг
         rated_tasks = [t for t in tasks if t.rating is not None]
         avg_rating = sum(t.rating for t in rated_tasks) / len(rated_tasks) if rated_tasks else 0
+
+        chat_done, chat_not_done = await ChatRequestQueries.count_by_sender(session, user.id)
         
         text = f"""
 📊 <b>ОБЩАЯ СТАТИСТИКА</b>
@@ -1553,6 +1521,10 @@ async def callback_buyer_stats_general(callback: CallbackQuery):
 
 ⭐️ <b>Средний рейтинг работ:</b> {avg_rating:.1f}/5.0
    (оценено задач: {len(rated_tasks)})
+
+💬 <b>Запросы в чатах:</b>
+   ✅ Выполнение: {chat_done}
+   ❌ Невыполнение: {chat_not_done}
 
 <b>Процент завершения:</b>
    {round(approved / total * 100) if total > 0 else 0}%
@@ -1841,6 +1813,8 @@ async def callback_buyer_period_selected(callback: CallbackQuery):
         # Средний рейтинг за период
         rated_tasks = [t for t in completed_tasks if t.rating is not None]
         avg_rating = sum(t.rating for t in rated_tasks) / len(rated_tasks) if rated_tasks else 0
+
+        chat_done, chat_not_done = await ChatRequestQueries.count_by_sender(session, user.id, start_date=start_date)
         
         text = f"""
 📊 <b>СТАТИСТИКА: {period_name.upper()}</b>
@@ -1854,6 +1828,10 @@ async def callback_buyer_period_selected(callback: CallbackQuery):
 
 ⭐️ <b>Средний рейтинг:</b> {avg_rating:.1f}/5.0
    (оценено: {len(rated_tasks)} задач)
+
+💬 <b>Запросы в чатах:</b>
+   ✅ Выполнение: {chat_done}
+   ❌ Невыполнение: {chat_not_done}
 
 <b>Процент завершения:</b>
    {round(completed_count / created_count * 100) if created_count > 0 else 0}%
