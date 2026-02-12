@@ -3889,16 +3889,23 @@ async def callback_chats_page(callback: CallbackQuery):
 
 async def _render_chat_info(callback: CallbackQuery, chat):
     """Рендер информации о чате"""
+    await callback.message.edit_text(
+        _build_chat_info_text(chat),
+        reply_markup=AdminKeyboards.chat_actions(chat.id, include_delete=True),
+        parse_mode="HTML"
+    )
+
+def _build_chat_info_text(chat) -> str:
     status_emoji = "👑" if chat.bot_status == "administrator" else "👤"
     status_text = "Администратор" if chat.bot_status == "administrator" else "Участник"
-    
+
     chat_type_names = {
         "group": "Группа",
         "supergroup": "Супергруппа",
-        "channel": "Канал"
+        "channel": "Канал",
     }
     chat_type_name = chat_type_names.get(chat.chat_type, chat.chat_type)
-    
+
     text = f"""
 💬 <b>ИНФОРМАЦИЯ О ЧАТЕ</b>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3908,14 +3915,8 @@ async def _render_chat_info(callback: CallbackQuery, chat):
 📋 <b>Тип:</b> {chat_type_name}
 {status_emoji} <b>Статус бота:</b> {status_text}
 """
-    
     text += f"\n📅 <b>Добавлен:</b> {chat.created_at.strftime('%d.%m.%Y %H:%M') if chat.created_at else 'Неизвестно'}"
-    
-    await callback.message.edit_text(
-        text,
-        reply_markup=AdminKeyboards.chat_actions(chat.id, include_delete=True),
-        parse_mode="HTML"
-    )
+    return text
 
 
 async def _get_open_tasks_for_executor(session: AsyncSession, executor_id: int, page: int = 1, per_page: int = 10):
@@ -3973,6 +3974,91 @@ async def callback_view_chat(callback: CallbackQuery):
         await _render_chat_info(callback, chat)
     
     await callback.answer()
+
+@router.callback_query(F.data.startswith("admin_edit_chat_title_"))
+async def callback_edit_chat_title(callback: CallbackQuery, state: FSMContext):
+    """Изменение названия чата (chat_title)"""
+    chat_db_id = int(callback.data.split("_")[-1])
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, callback.from_user.id)
+
+        if not user or user.role != UserRole.ADMIN:
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
+
+        chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+        if not chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+
+        await state.update_data(chat_db_id=chat_db_id)
+        await state.set_state(AdminStates.waiting_chat_title)
+
+        await callback.message.edit_text(
+            "📝 <b>ИЗМЕНЕНИЕ НАЗВАНИЯ ЧАТА</b>\n\n"
+            f"Текущее название: <b>{chat.chat_title or 'Не указано'}</b>\n"
+            f"Chat ID: <code>{chat.chat_id}</code>\n\n"
+            "Отправьте новое название (до 255 символов).",
+            reply_markup=CommonKeyboards.cancel(),
+            parse_mode="HTML",
+        )
+
+    await callback.answer()
+
+
+@router.message(AdminStates.waiting_chat_title)
+async def process_edit_chat_title(message: Message, state: FSMContext):
+    """Принимает новое название чата и сохраняет в таблицу chats"""
+    if not message.text:
+        await message.answer("❌ Отправьте текст (название чата).", reply_markup=CommonKeyboards.cancel())
+        return
+
+    new_title = (message.text or "").strip()
+    if not new_title:
+        await message.answer("❌ Название не может быть пустым.", reply_markup=CommonKeyboards.cancel())
+        return
+
+    if len(new_title) > 255:
+        await message.answer(
+            f"❌ Слишком длинное название: {len(new_title)} символов.\n"
+            "Максимум: 255.\n\n"
+            "Отправьте более короткое название.",
+            reply_markup=CommonKeyboards.cancel(),
+        )
+        return
+
+    data = await state.get_data()
+    chat_db_id = data.get("chat_db_id")
+    if not chat_db_id:
+        await message.answer("❌ Ошибка: не выбран чат.")
+        await state.clear()
+        return
+
+    async with AsyncSessionLocal() as session:
+        user = await UserQueries.get_user_by_telegram_id(session, message.from_user.id)
+        if not user or user.role != UserRole.ADMIN:
+            from aiogram.dispatcher.event.bases import UNHANDLED
+
+            return UNHANDLED
+
+        chat = await ChatQueries.update_chat_title_by_db_id(session, int(chat_db_id), new_title)
+        if not chat:
+            await message.answer("❌ Не удалось обновить название чата.")
+            await state.clear()
+            return
+
+    await state.clear()
+    await message.answer(
+        "✅ <b>Название чата обновлено.</b>",
+        parse_mode="HTML",
+    )
+    await message.answer(
+        _build_chat_info_text(chat),
+        reply_markup=AdminKeyboards.chat_actions(chat.id, include_delete=True),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(F.data.startswith("admin_send_message_chat_"))

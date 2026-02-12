@@ -128,14 +128,14 @@ class CommonKeyboards:
                 callback_data=f"view_file_{context}:{idx}"
             )
         
-        builder.adjust(1)  # По одной кнопке в ряд
+        builder.adjust(1) 
         return builder.as_markup()
     
     @staticmethod
     def chat_task_complete(task_id: int) -> InlineKeyboardMarkup:
         """Кнопка "Выполнить" для задач в чате"""
         builder = InlineKeyboardBuilder()
-        builder.button(text="✅ ВЫПОЛНИТЬ", callback_data=f"chat_task_complete_{task_id}")
+        builder.button(text="✅ Выполнено", callback_data=f"chat_task_complete_{task_id}")
         builder.adjust(1)
         return builder.as_markup()
 
