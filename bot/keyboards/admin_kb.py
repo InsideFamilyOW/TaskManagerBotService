@@ -718,6 +718,7 @@ class AdminKeyboards:
         builder = InlineKeyboardBuilder()
         builder.button(text="✉️ Написать сообщение в этот чат", callback_data=f"admin_send_message_chat_{chat_db_id}")
         builder.button(text="📤 Отправить задачу в чат", callback_data=f"admin_send_task_chat_{chat_db_id}")
+        builder.button(text="📝 Изменить название", callback_data=f"admin_edit_chat_title_{chat_db_id}")
         if include_delete:
             builder.button(text="🗑 Удалить чат", callback_data=f"admin_delete_chat_{chat_db_id}")
         builder.button(text="◀️ Назад к списку", callback_data="admin_chats_list")

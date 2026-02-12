@@ -179,8 +179,29 @@ class ChatQueries:
                 logger.info(f"Статус чата {chat_id} обновлен на {bot_status}")
                 return True
             return False
-            
         except Exception as e:
             await session.rollback()
             logger.error(f"Ошибка при обновлении статуса чата: {e}")
             return False
+
+    @staticmethod
+    async def update_chat_title_by_db_id(
+        session: AsyncSession,
+        chat_db_id: int,
+        chat_title: str | None,
+    ) -> Optional[Chat]:
+        """Обновить chat_title у чата по ID в БД"""
+        try:
+            chat = await ChatQueries.get_chat_by_db_id(session, chat_db_id)
+            if not chat:
+                return None
+
+            chat.chat_title = chat_title
+            await session.commit()
+            await session.refresh(chat)
+            logger.info(f"Обновлено название чата (db_id={chat_db_id}): {chat_title}")
+            return chat
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Ошибка при обновлении названия чата (db_id={chat_db_id}): {e}")
+            return None
